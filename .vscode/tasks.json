@@ -202,6 +202,24 @@
         "reveal": "always",
         "panel": "new"
       }
+    },
+    {
+      "label": "HA: Start watchdog (debugpy, no-wait)",
+      "type": "shell",
+      "command": "bash -lc 'set -euo pipefail; /home/vscode/.local/ha-venv/bin/python -m watchdog.watchmedo auto-restart --directory=. --pattern=\"*.py\" --recursive --ignore-patterns=\"*/.git/*;*/.venv/*;*/deps/*;*/config/*\" -- /home/vscode/.local/ha-venv/bin/python -X dev -m debugpy --listen 5678 -m homeassistant -c config'",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "HA: Autoreload Debug (compound)",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Compile English translations",
+        "HA: Start watchdog (debugpy, no-wait)"
+      ]
     }
   ],
   "inputs": [

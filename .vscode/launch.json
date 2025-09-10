@@ -82,6 +82,15 @@
           "remoteRoot": "/usr/src/homeassistant"
         }
       ]
+    },
+    {
+      "name": "Home Assistant (autoreload via watchdog)",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": { "host": "127.0.0.1", "port": 5678 },
+      "justMyCode": false,
+      "preLaunchTask": "HA: Autoreload Debug (compound)"
     }
+
   ]
 }
