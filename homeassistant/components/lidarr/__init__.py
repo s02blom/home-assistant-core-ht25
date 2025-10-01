@@ -39,7 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LidarrConfigEntry) -> bo
         session=async_get_clientsession(hass, host_configuration.verify_ssl),
         request_timeout=60,
     )
-    data = LidarrData(
+    data: LidarrData = LidarrData(
         disk_space=DiskSpaceDataUpdateCoordinator(
             hass, entry, host_configuration, lidarr
         ),
