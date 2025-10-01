@@ -533,7 +533,7 @@ class _CipherBackupStreamer:
     ) -> None:
         """Initialize."""
         self._workers: list[_CipherWorkerStatus] = []
-        self._backup = backup
+        self._backup: AgentBackup = backup
         self._hass = hass
         self._open_stream = open_stream
         self._password = password
