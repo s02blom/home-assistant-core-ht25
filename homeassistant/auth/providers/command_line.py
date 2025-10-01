@@ -77,7 +77,7 @@ class CommandLineAuthProvider(AuthProvider):
         key = key.strip()
         value = value.strip()
         if key in self.ALLOWED_META_KEYS:
-            return (key,value)
+            return (key, value)
         return None
 
     async def async_validate_login(self, username: str, password: str) -> None:
