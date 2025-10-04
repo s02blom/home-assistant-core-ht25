@@ -591,9 +591,14 @@ class DecryptedBackupStreamer(_CipherBackupStreamer):
 
     _cipher_func = staticmethod(decrypt_backup)
 
+    def _replace_agentbackup(self, obj: AgentBackup, **changes: Any) -> AgentBackup:
+        return replace(obj, **changes)
+
     def backup(self) -> AgentBackup:
         """Return the decrypted backup."""
-        return replace(self._backup, protected=False, size=self.size())
+        return self._replace_agentbackup(
+            self._backup, protected=False, size=self.size()
+        )
 
 
 class EncryptedBackupStreamer(_CipherBackupStreamer):
