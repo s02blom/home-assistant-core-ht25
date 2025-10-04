@@ -342,7 +342,7 @@ class MatrixBot:
             save_json,
             self._session_filepath,
             self._access_tokens,
-            True,  # private=True
+            True,  # private means True
         )
 
     async def _login(self) -> None:
