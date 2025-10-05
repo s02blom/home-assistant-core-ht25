@@ -81,7 +81,7 @@ ATTR_NEXT_UP_REALTIME = "next_real_time"
 ATTR_TRANSPORT_MODE = "transport_mode"
 
 
-def due_in_minutes(timestamp: datetime) -> int:
+def due_in_minutes(timestamp: datetime) -> int | None:
     """Get the time in minutes from a timestamp."""
     if timestamp is None:
         return None
