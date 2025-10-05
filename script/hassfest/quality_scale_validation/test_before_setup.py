@@ -15,7 +15,7 @@ _VALID_EXCEPTIONS = {
 }
 
 
-def _get_exception_name(expression: ast.expr) -> str:
+def _get_exception_name(expression: ast.expr) -> str | None:
     """Get the name of the exception being raised."""
     if expression is None:
         # Bare raise
