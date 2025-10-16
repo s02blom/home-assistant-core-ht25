@@ -12,6 +12,7 @@ from homeassistant.components.shopping_list.const import (
     SERVICE_ADD_ITEM,
     SERVICE_CLEAR_COMPLETED_ITEMS,
     SERVICE_COMPLETE_ITEM,
+    SERVICE_EXPORT,
     SERVICE_REMOVE_ITEM,
     SERVICE_SORT,
 )
@@ -766,3 +767,202 @@ async def test_sort_list_service(hass: HomeAssistant, sl_setup) -> None:
     assert hass.data[DOMAIN].items[1][ATTR_NAME] == "ddd"
     assert hass.data[DOMAIN].items[2][ATTR_NAME] == "aaa"
     assert len(events) == 2
+
+
+async def test_export_list_service_json(hass: HomeAssistant, sl_setup) -> None:
+    """Test exporting shopping list to json format via service."""
+    import json
+    import os
+
+    # Create www directory in test config path
+    www_dir = hass.config.path("www")
+    os.makedirs(www_dir, exist_ok=True)
+
+    # Add items to the shopping list
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "beer"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "cheese"},
+        blocking=True,
+    )
+
+    # Mark one item as complete
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_COMPLETE_ITEM,
+        {ATTR_NAME: "beer"},
+        blocking=True,
+    )
+
+    # Test export with json format (default)
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_EXPORT,
+        {"filetype": "json"},
+        blocking=True,
+    )
+
+    # Verify the export completed and file was created
+    assert len(hass.data[DOMAIN].items) == 2
+
+    # Verify the file exists and has correct content
+    export_file = os.path.join(www_dir, "shopping_list.json")
+    assert os.path.exists(export_file)
+
+    with open(export_file, encoding="utf-8") as f:
+        exported_data = json.load(f)
+
+    assert len(exported_data) == 2
+    assert any(
+        item["name"] == "beer" and item["complete"] is True for item in exported_data
+    )
+    assert any(
+        item["name"] == "cheese" and item["complete"] is False for item in exported_data
+    )
+
+
+async def test_export_list_service_csv(hass: HomeAssistant, sl_setup) -> None:
+    """Test exporting shopping list to csv format via service."""
+    import csv
+    import os
+
+    # Create www directory in test config path
+    www_dir = hass.config.path("www")
+    os.makedirs(www_dir, exist_ok=True)
+
+    # Add items to the shopping list
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "milk"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "eggs"},
+        blocking=True,
+    )
+
+    # Test export with csv format
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_EXPORT,
+        {"filetype": "csv"},
+        blocking=True,
+    )
+
+    # Verify the export completed without errors
+    assert len(hass.data[DOMAIN].items) == 2
+
+    # Verify the file exists and has correct content
+    export_file = os.path.join(www_dir, "shopping_list.csv")
+    assert os.path.exists(export_file)
+
+    with open(export_file, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    assert len(rows) == 2
+    assert any(row["name"] == "milk" and row["complete"] == "False" for row in rows)
+    assert any(row["name"] == "eggs" and row["complete"] == "False" for row in rows)
+
+
+async def test_ws_export_list(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, sl_setup
+) -> None:
+    """Test exporting shopping list via websocket command."""
+    import json
+    import os
+
+    # Create www directory in test config path
+    www_dir = hass.config.path("www")
+    os.makedirs(www_dir, exist_ok=True)
+
+    # Add items to the shopping list
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "bread"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "butter"},
+        blocking=True,
+    )
+
+    client = await hass_ws_client(hass)
+
+    # Test websocket export (defaults to json)
+    await client.send_json({"id": 10, "type": "shopping_list/export"})
+    msg = await client.receive_json()
+
+    assert msg["success"] is True
+    assert msg["id"] == 10
+    assert msg["type"] == TYPE_RESULT
+
+    # Verify the file was created
+    export_file = os.path.join(www_dir, "shopping_list.json")
+    assert os.path.exists(export_file)
+
+    with open(export_file, encoding="utf-8") as f:
+        exported_data = json.load(f)
+
+    assert len(exported_data) == 2
+    assert any(item["name"] == "bread" for item in exported_data)
+    assert any(item["name"] == "butter" for item in exported_data)
+
+
+async def test_export_list_service_pdf(hass: HomeAssistant, sl_setup) -> None:
+    """Test exporting shopping list to pdf format via service."""
+    import os
+
+    # Add items to the shopping list
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "apples"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_ITEM,
+        {ATTR_NAME: "oranges"},
+        blocking=True,
+    )
+
+    # Mark one item as complete
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_COMPLETE_ITEM,
+        {ATTR_NAME: "apples"},
+        blocking=True,
+    )
+
+    # Test export with pdf format
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_EXPORT,
+        {"filetype": "pdf"},
+        blocking=True,
+    )
+
+    # Verify the export completed without errors
+    assert len(hass.data[DOMAIN].items) == 2
+
+    # Verify the file exists
+    export_file = hass.config.path("shopping_list.pdf")
+    assert os.path.exists(export_file)
+
+    # Verify it's a valid PDF file (starts with PDF magic bytes)
+    with open(export_file, "rb") as f:
+        header = f.read(4)
+        assert header == b"%PDF"

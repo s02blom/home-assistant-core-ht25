@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import csv
 from http import HTTPStatus
 import logging
+import os
 from typing import Any, cast
 import uuid
 
 from aiohttp import web
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -31,6 +38,7 @@ from .const import (
     SERVICE_CLEAR_COMPLETED_ITEMS,
     SERVICE_COMPLETE_ALL,
     SERVICE_COMPLETE_ITEM,
+    SERVICE_EXPORT,
     SERVICE_INCOMPLETE_ALL,
     SERVICE_INCOMPLETE_ITEM,
     SERVICE_REMOVE_ITEM,
@@ -51,6 +59,7 @@ SERVICE_LIST_SCHEMA = vol.Schema({})
 SERVICE_SORT_SCHEMA = vol.Schema(
     {vol.Optional(ATTR_REVERSE, default=DEFAULT_REVERSE): bool}
 )
+SERVICE_EXPORT_SCHEMA = vol.Schema({vol.Optional("filetype", default="json"): str})
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -87,6 +96,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             _LOGGER.error("Removing of item failed: %s cannot be found", name)
         else:
             await data.async_remove(item["id"])
+
+    async def export_list_service(call: ServiceCall) -> None:
+        """Export the list into a fileformat. Can be csv,json or pdf"""
+        data = hass.data[DOMAIN]
+        export_type = call.data["filetype"]
+        try:
+            await data.export_list(export_type)
+        except Exception as e:
+            _LOGGER.error(f"Error occured: {e!s} ")
 
     async def complete_item_service(call: ServiceCall) -> None:
         """Mark the first item with matching `name` as completed."""
@@ -127,7 +145,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     data = hass.data[DOMAIN] = ShoppingData(hass)
     await data.async_load()
-
+    hass.services.async_register(
+        DOMAIN, SERVICE_EXPORT, export_list_service, schema=SERVICE_EXPORT_SCHEMA
+    )
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_ITEM, add_item_service, schema=SERVICE_ITEM_SCHEMA
     )
@@ -179,7 +199,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     websocket_api.async_register_command(hass, websocket_handle_update)
     websocket_api.async_register_command(hass, websocket_handle_clear)
     websocket_api.async_register_command(hass, websocket_handle_reorder)
-
+    websocket_api.async_register_command(hass, websocket_handle_export)
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
     return True
@@ -324,6 +344,78 @@ class ShoppingData:
             context=context,
         )
         return self.items
+
+    async def export_list(self, option: str = "json") -> None:
+        """Export the shopping list to csv, json or pdf."""
+        # Use the hass config path for www directory
+        www_dir = self.hass.config.path("www")
+
+        def ensure_www_dir() -> None:
+            """Ensure www directory exists."""
+            os.makedirs(www_dir, exist_ok=True)
+
+        # Create www directory if it doesn't exist
+        await self.hass.async_add_executor_job(ensure_www_dir)
+
+        path = f"{www_dir}/shopping_list"
+
+        if option == "json":
+            await self.hass.async_add_executor_job(
+                save_json, f"{path}.json", self.items
+            )
+        elif option == "csv":
+
+            def write_csv() -> None:
+                """Write CSV file synchronously."""
+                with open(f"{path}.csv", "w", newline="", encoding="utf-8") as csvfile:
+                    headers = ["name", "id", "complete"]
+                    writer = csv.DictWriter(csvfile, fieldnames=headers)
+                    writer.writeheader()
+                    writer.writerows(self.items)
+
+            await self.hass.async_add_executor_job(write_csv)
+        elif option == "pdf":
+
+            def write_pdf() -> None:
+                """Write PDF file synchronously."""
+                pdf_path = f"{path}.pdf"
+                doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+                elements = []
+
+                # Add title
+                styles = getSampleStyleSheet()
+                title = Paragraph("Shopping List", styles["Title"])
+                elements.append(title)
+                elements.append(Spacer(1, 1 * cm))
+
+                # Create table data
+                table_data = [["Item", "Status"]]
+                for item in self.items:
+                    status = "Complete" if item["complete"] else "Incomplete"
+                    table_data.append([cast(str, item["name"]), status])
+
+                # Create table with styling
+                table = Table(table_data, colWidths=[12 * cm, 8 * cm])
+                table.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("FONTSIZE", (0, 0), (-1, 0), 14),
+                            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                            ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
+                            ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                        ]
+                    )
+                )
+                elements.append(table)
+
+                # Build PDF
+                doc.build(elements)
+
+            await self.hass.async_add_executor_job(write_pdf)
 
     @callback
     def async_reorder(
@@ -497,6 +589,18 @@ def websocket_handle_items(
     connection.send_message(
         websocket_api.result_message(msg["id"], hass.data[DOMAIN].items)
     )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "shopping_list/export", vol.Optional("filetype"): str}
+)
+@websocket_api.async_response
+async def websocket_handle_export(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Handle exporting shopping list to csv,json,pdf"""
+    await hass.data[DOMAIN].export_list()
+    connection.send_message(websocket_api.result_message(msg["id"]))
 
 
 @websocket_api.websocket_command(

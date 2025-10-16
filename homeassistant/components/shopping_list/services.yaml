@@ -39,3 +39,19 @@ sort:
       default: false
       selector:
         boolean:
+
+export:
+  fields:
+    filetype:
+      required: false
+      default: json
+      example: json
+      selector:
+        select:
+          options:
+            - label: JSON
+              value: json
+            - label: CSV
+              value: csv
+            - label: PDF
+              value: pdf

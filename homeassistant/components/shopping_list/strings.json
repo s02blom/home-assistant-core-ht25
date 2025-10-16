@@ -73,6 +73,16 @@
           "description": "Whether to sort in reverse (descending) order."
         }
       }
+    },
+    "export": {
+      "name": "Export",
+      "description": "Exports the shopping list to a file in JSON, CSV, or PDF format.",
+      "fields": {
+        "filetype": {
+          "name": "File type",
+          "description": "The format to export the shopping list (json, csv, or pdf)."
+        }
+      }
     }
   },
   "entity": {
