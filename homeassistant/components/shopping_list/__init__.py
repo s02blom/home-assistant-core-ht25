@@ -36,6 +36,7 @@ from .const import (
     SERVICE_REMOVE_ITEM,
     SERVICE_SORT,
 )
+from .recommendations import recommender  # type: ignore[reportMissingImports]
 
 PLATFORMS = [Platform.TODO]
 
@@ -179,6 +180,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     websocket_api.async_register_command(hass, websocket_handle_update)
     websocket_api.async_register_command(hass, websocket_handle_clear)
     websocket_api.async_register_command(hass, websocket_handle_reorder)
+    websocket_api.async_register_command(hass, websocket_handle_recommendations)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
@@ -409,8 +411,24 @@ class ShoppingData:
         self.items = await self.hass.async_add_executor_job(load)
 
     def save(self) -> None:
-        """Save the items."""
+        """Save the items and update recommendations."""
         save_json(self.hass.config.path(PERSISTENCE), self.items)
+
+        # Update co-occurrence data for recommendations
+        try:
+            # Only consider active (incomplete) items
+            active_items = [
+                i["name"]
+                for i in self.items
+                if isinstance(i.get("name"), str) and not i.get("complete")
+            ]
+
+            # Only record relationships if there are at least two active items
+            if len(active_items) > 1:
+                recommender.observe_list(active_items)
+
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Failed to update shopping recommendations: %s", err)
 
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         """Add a listener to notify when data is updated."""
@@ -612,3 +630,21 @@ def websocket_handle_reorder(
         return
 
     connection.send_result(msg_id)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shopping_list/recommendations",
+        vol.Required("item"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_handle_recommendations(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return item recommendations for a given shopping list item."""
+    item = msg["item"]
+    suggestions = recommender.suggest(item)
+    connection.send_result(msg["id"], {"suggestions": suggestions})
