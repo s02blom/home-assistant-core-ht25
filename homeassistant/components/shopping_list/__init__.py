@@ -98,13 +98,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             await data.async_remove(item["id"])
 
     async def export_list_service(call: ServiceCall) -> None:
-        """Export the list into a fileformat. Can be csv,json or pdf"""
+        """Export the list into a fileformat. Can be csv, json or pdf."""
         data = hass.data[DOMAIN]
         export_type = call.data["filetype"]
-        try:
-            await data.export_list(export_type)
-        except Exception as e:
-            _LOGGER.error(f"Error occured: {e!s} ")
+        await data.export_list(export_type)
 
     async def complete_item_service(call: ServiceCall) -> None:
         """Mark the first item with matching `name` as completed."""
@@ -598,7 +595,7 @@ def websocket_handle_items(
 async def websocket_handle_export(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Handle exporting shopping list to csv,json,pdf"""
+    """Handle exporting shopping list to csv,json,pdf."""
     await hass.data[DOMAIN].export_list()
     connection.send_message(websocket_api.result_message(msg["id"]))
 

@@ -1,6 +1,9 @@
 """Test shopping list component."""
 
+import csv
 from http import HTTPStatus
+import json
+import os
 
 import pytest
 
@@ -24,6 +27,7 @@ from homeassistant.components.websocket_api import (
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
+from homeassistant.util import file as file_util
 
 from tests.common import async_capture_events
 from tests.typing import ClientSessionGenerator, WebSocketGenerator
@@ -771,9 +775,6 @@ async def test_sort_list_service(hass: HomeAssistant, sl_setup) -> None:
 
 async def test_export_list_service_json(hass: HomeAssistant, sl_setup) -> None:
     """Test exporting shopping list to json format via service."""
-    import json
-    import os
-
     # Create www directory in test config path
     www_dir = hass.config.path("www")
     os.makedirs(www_dir, exist_ok=True)
@@ -815,8 +816,7 @@ async def test_export_list_service_json(hass: HomeAssistant, sl_setup) -> None:
     export_file = os.path.join(www_dir, "shopping_list.json")
     assert os.path.exists(export_file)
 
-    with open(export_file, encoding="utf-8") as f:
-        exported_data = json.load(f)
+    exported_data = json.loads(await file_util.async_load(export_file))
 
     assert len(exported_data) == 2
     assert any(
@@ -829,9 +829,6 @@ async def test_export_list_service_json(hass: HomeAssistant, sl_setup) -> None:
 
 async def test_export_list_service_csv(hass: HomeAssistant, sl_setup) -> None:
     """Test exporting shopping list to csv format via service."""
-    import csv
-    import os
-
     # Create www directory in test config path
     www_dir = hass.config.path("www")
     os.makedirs(www_dir, exist_ok=True)
@@ -865,9 +862,9 @@ async def test_export_list_service_csv(hass: HomeAssistant, sl_setup) -> None:
     export_file = os.path.join(www_dir, "shopping_list.csv")
     assert os.path.exists(export_file)
 
-    with open(export_file, encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
+    csv_content = await file_util.async_load(export_file)
+    reader = csv.DictReader(csv_content.splitlines())
+    rows = list(reader)
 
     assert len(rows) == 2
     assert any(row["name"] == "milk" and row["complete"] == "False" for row in rows)
@@ -878,9 +875,6 @@ async def test_ws_export_list(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator, sl_setup
 ) -> None:
     """Test exporting shopping list via websocket command."""
-    import json
-    import os
-
     # Create www directory in test config path
     www_dir = hass.config.path("www")
     os.makedirs(www_dir, exist_ok=True)
@@ -913,8 +907,7 @@ async def test_ws_export_list(
     export_file = os.path.join(www_dir, "shopping_list.json")
     assert os.path.exists(export_file)
 
-    with open(export_file, encoding="utf-8") as f:
-        exported_data = json.load(f)
+    exported_data = json.loads(await file_util.async_load(export_file))
 
     assert len(exported_data) == 2
     assert any(item["name"] == "bread" for item in exported_data)
@@ -923,8 +916,6 @@ async def test_ws_export_list(
 
 async def test_export_list_service_pdf(hass: HomeAssistant, sl_setup) -> None:
     """Test exporting shopping list to pdf format via service."""
-    import os
-
     # Add items to the shopping list
     await hass.services.async_call(
         DOMAIN,
@@ -963,6 +954,5 @@ async def test_export_list_service_pdf(hass: HomeAssistant, sl_setup) -> None:
     assert os.path.exists(export_file)
 
     # Verify it's a valid PDF file (starts with PDF magic bytes)
-    with open(export_file, "rb") as f:
-        header = f.read(4)
-        assert header == b"%PDF"
+    pdf_content = await file_util.async_load_bytes(export_file)
+    assert pdf_content[:4] == b"%PDF"
