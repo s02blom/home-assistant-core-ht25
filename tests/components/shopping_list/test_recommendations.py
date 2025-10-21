@@ -1,22 +1,31 @@
-"""Tests for shopping list smart recommendations."""
+"""Tests for Shopping List smart recommendations."""
 
-import pytest
 from homeassistant.components.shopping_list.recommendations import ShoppingRecommender
+from homeassistant.core import HomeAssistant
 
 
-@pytest.fixture
-def recommender():
-    return ShoppingRecommender()
+async def test_observe_and_suggest_basic(hass: HomeAssistant) -> None:
+    """Test that observing items creates expected suggestions."""
+    rec = ShoppingRecommender()
+    rec.observe_list(["milk", "bread", "eggs"])
 
-
-def test_observe_and_suggest(tmp_path, recommender):
-    # simulate user adding milk + bread + egg together
-    recommender.observe_list(["milk", "bread", "egg"])
-
-    # assert co-occurrence relationships are tracked
-    suggestions = recommender.suggest("milk")
+    suggestions = rec.suggest("milk")
     assert "bread" in suggestions
-    assert "egg" in suggestions
+    assert "eggs" in suggestions
+    assert len(suggestions) <= 3
 
-def test_empty_recommendations(recommender):
-    assert recommender.suggest("unknown_item") == []
+
+async def test_suggest_returns_empty_for_unknown_item(hass: HomeAssistant) -> None:
+    """Test that unknown items return an empty list."""
+    rec = ShoppingRecommender()
+    result = rec.suggest("nonexistent")
+    assert result == []
+
+
+async def test_cooccurrence_counts_increase(hass: HomeAssistant) -> None:
+    """Test that repeated co-occurrences increase the stored counts."""
+    rec = ShoppingRecommender()
+    rec.observe_list(["milk", "bread"])
+    rec.observe_list(["milk", "bread"])
+
+    assert rec.cooccur["milk"]["bread"] >= 2
