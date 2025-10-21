@@ -360,7 +360,7 @@ class ShoppingData:
 
             def create_json() -> str:
                 """Create JSON string."""
-                return json.dumps(self.items, indent=2)
+                return self.items
 
             content = await self.hass.async_add_executor_job(create_json)
             return {
