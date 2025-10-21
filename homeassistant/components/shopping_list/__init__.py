@@ -7,7 +7,6 @@ from collections.abc import Callable
 import csv
 from http import HTTPStatus
 from io import BytesIO, StringIO
-import json
 import logging
 from typing import Any, cast
 import uuid
@@ -358,13 +357,15 @@ class ShoppingData:
         """Export the shopping list to csv, json or pdf and return the data."""
         if option == "json":
 
-            def create_json() -> str:
-                """Create JSON string."""
+            def create_json() -> list[dict[str, JsonValueType]]:
+                """Create JSON list."""
                 return self.items
 
-            content = await self.hass.async_add_executor_job(create_json)
+            json_content: list[
+                dict[str, JsonValueType]
+            ] = await self.hass.async_add_executor_job(create_json)
             return {
-                "content": content,
+                "content": json_content,
                 "filename": "shopping_list.json",
                 "mime_type": "application/json",
             }
@@ -380,9 +381,9 @@ class ShoppingData:
                 writer.writerows(self.items)
                 return output.getvalue()
 
-            content = await self.hass.async_add_executor_job(create_csv)
+            csv_content: str = await self.hass.async_add_executor_job(create_csv)
             return {
-                "content": content,
+                "content": csv_content,
                 "filename": "shopping_list.csv",
                 "mime_type": "text/csv",
             }
@@ -429,11 +430,11 @@ class ShoppingData:
                 doc.build(elements)
                 return buffer.getvalue()
 
-            content_bytes = await self.hass.async_add_executor_job(create_pdf)
+            pdf_bytes: bytes = await self.hass.async_add_executor_job(create_pdf)
             # Encode bytes to base64 for transmission
-            content = base64.b64encode(content_bytes).decode("utf-8")
+            pdf_content: str = base64.b64encode(pdf_bytes).decode("utf-8")
             return {
-                "content": content,
+                "content": pdf_content,
                 "filename": "shopping_list.pdf",
                 "mime_type": "application/pdf",
                 "encoding": "base64",
