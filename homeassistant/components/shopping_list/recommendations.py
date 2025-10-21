@@ -6,7 +6,8 @@ from collections import Counter, defaultdict
 import json
 from pathlib import Path
 
-STORAGE_PATH = Path(".storage/shopping_recommendations.json")
+# Dynamically point to the Home Assistant config storage directory
+STORAGE_PATH = Path("/config/.storage/shopping_recommendations.json")
 
 
 class ShoppingRecommender:
@@ -37,11 +38,13 @@ class ShoppingRecommender:
 
     def observe_list(self, items: list[str]) -> None:
         """Update co-occurrence stats from a list of items."""
+
         norm = [i.lower() for i in items if i.strip()]
         for a in norm:
             for b in norm:
                 if a != b:
                     self.cooccur[a][b] += 1
+
         self._save()
 
     def suggest(self, item: str, limit: int = 3) -> list[str]:
