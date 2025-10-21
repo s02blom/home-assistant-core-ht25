@@ -1,9 +1,9 @@
 """Test shopping list component."""
 
+import base64
 import csv
 from http import HTTPStatus
 import json
-import os
 
 import pytest
 
@@ -27,7 +27,6 @@ from homeassistant.components.websocket_api import (
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
-from homeassistant.util import file as file_util
 
 from tests.common import async_capture_events
 from tests.typing import ClientSessionGenerator, WebSocketGenerator
@@ -775,10 +774,6 @@ async def test_sort_list_service(hass: HomeAssistant, sl_setup) -> None:
 
 async def test_export_list_service_json(hass: HomeAssistant, sl_setup) -> None:
     """Test exporting shopping list to json format via service."""
-    # Create www directory in test config path
-    www_dir = hass.config.path("www")
-    os.makedirs(www_dir, exist_ok=True)
-
     # Add items to the shopping list
     await hass.services.async_call(
         DOMAIN,
@@ -802,21 +797,23 @@ async def test_export_list_service_json(hass: HomeAssistant, sl_setup) -> None:
     )
 
     # Test export with json format (default)
-    await hass.services.async_call(
+    response = await hass.services.async_call(
         DOMAIN,
         SERVICE_EXPORT,
         {"filetype": "json"},
         blocking=True,
+        return_response=True,
     )
 
-    # Verify the export completed and file was created
-    assert len(hass.data[DOMAIN].items) == 2
+    # Verify the response structure
+    assert "content" in response
+    assert "filename" in response
+    assert "mime_type" in response
+    assert response["filename"] == "shopping_list.json"
+    assert response["mime_type"] == "application/json"
 
-    # Verify the file exists and has correct content
-    export_file = os.path.join(www_dir, "shopping_list.json")
-    assert os.path.exists(export_file)
-
-    exported_data = json.loads(await file_util.async_load(export_file))
+    # Parse and verify the exported data
+    exported_data = json.loads(response["content"])
 
     assert len(exported_data) == 2
     assert any(
@@ -829,10 +826,6 @@ async def test_export_list_service_json(hass: HomeAssistant, sl_setup) -> None:
 
 async def test_export_list_service_csv(hass: HomeAssistant, sl_setup) -> None:
     """Test exporting shopping list to csv format via service."""
-    # Create www directory in test config path
-    www_dir = hass.config.path("www")
-    os.makedirs(www_dir, exist_ok=True)
-
     # Add items to the shopping list
     await hass.services.async_call(
         DOMAIN,
@@ -848,21 +841,23 @@ async def test_export_list_service_csv(hass: HomeAssistant, sl_setup) -> None:
     )
 
     # Test export with csv format
-    await hass.services.async_call(
+    response = await hass.services.async_call(
         DOMAIN,
         SERVICE_EXPORT,
         {"filetype": "csv"},
         blocking=True,
+        return_response=True,
     )
 
-    # Verify the export completed without errors
-    assert len(hass.data[DOMAIN].items) == 2
+    # Verify the response structure
+    assert "content" in response
+    assert "filename" in response
+    assert "mime_type" in response
+    assert response["filename"] == "shopping_list.csv"
+    assert response["mime_type"] == "text/csv"
 
-    # Verify the file exists and has correct content
-    export_file = os.path.join(www_dir, "shopping_list.csv")
-    assert os.path.exists(export_file)
-
-    csv_content = await file_util.async_load(export_file)
+    # Parse and verify the CSV content
+    csv_content = response["content"]
     reader = csv.DictReader(csv_content.splitlines())
     rows = list(reader)
 
@@ -875,10 +870,6 @@ async def test_ws_export_list(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator, sl_setup
 ) -> None:
     """Test exporting shopping list via websocket command."""
-    # Create www directory in test config path
-    www_dir = hass.config.path("www")
-    os.makedirs(www_dir, exist_ok=True)
-
     # Add items to the shopping list
     await hass.services.async_call(
         DOMAIN,
@@ -903,11 +894,16 @@ async def test_ws_export_list(
     assert msg["id"] == 10
     assert msg["type"] == TYPE_RESULT
 
-    # Verify the file was created
-    export_file = os.path.join(www_dir, "shopping_list.json")
-    assert os.path.exists(export_file)
+    # Verify the response contains the export data
+    result = msg["result"]
+    assert "content" in result
+    assert "filename" in result
+    assert "mime_type" in result
+    assert result["filename"] == "shopping_list.json"
+    assert result["mime_type"] == "application/json"
 
-    exported_data = json.loads(await file_util.async_load(export_file))
+    # Parse and verify the exported data
+    exported_data = json.loads(result["content"])
 
     assert len(exported_data) == 2
     assert any(item["name"] == "bread" for item in exported_data)
@@ -939,20 +935,23 @@ async def test_export_list_service_pdf(hass: HomeAssistant, sl_setup) -> None:
     )
 
     # Test export with pdf format
-    await hass.services.async_call(
+    response = await hass.services.async_call(
         DOMAIN,
         SERVICE_EXPORT,
         {"filetype": "pdf"},
         blocking=True,
+        return_response=True,
     )
 
-    # Verify the export completed without errors
-    assert len(hass.data[DOMAIN].items) == 2
+    # Verify the response structure
+    assert "content" in response
+    assert "filename" in response
+    assert "mime_type" in response
+    assert "encoding" in response
+    assert response["filename"] == "shopping_list.pdf"
+    assert response["mime_type"] == "application/pdf"
+    assert response["encoding"] == "base64"
 
-    # Verify the file exists
-    export_file = hass.config.path("shopping_list.pdf")
-    assert os.path.exists(export_file)
-
-    # Verify it's a valid PDF file (starts with PDF magic bytes)
-    pdf_content = await file_util.async_load_bytes(export_file)
+    # Decode base64 and verify it's a valid PDF file (starts with PDF magic bytes)
+    pdf_content = base64.b64decode(response["content"])
     assert pdf_content[:4] == b"%PDF"

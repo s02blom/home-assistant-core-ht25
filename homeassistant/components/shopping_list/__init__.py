@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 import csv
 from http import HTTPStatus
+from io import BytesIO, StringIO
+import json
 import logging
-import os
 from typing import Any, cast
 import uuid
 
@@ -23,7 +25,13 @@ from homeassistant.components import http, websocket_api
 from homeassistant.components.http.data_validator import RequestDataValidator
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_NAME, Platform
-from homeassistant.core import Context, HomeAssistant, ServiceCall, callback
+from homeassistant.core import (
+    Context,
+    HomeAssistant,
+    ServiceCall,
+    SupportsResponse,
+    callback,
+)
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.json import save_json
 from homeassistant.helpers.typing import ConfigType
@@ -97,11 +105,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         else:
             await data.async_remove(item["id"])
 
-    async def export_list_service(call: ServiceCall) -> None:
+    async def export_list_service(call: ServiceCall) -> dict[str, Any]:
         """Export the list into a fileformat. Can be csv, json or pdf."""
-        data = hass.data[DOMAIN]
-        export_type = call.data["filetype"]
-        await data.export_list(export_type)
+        data = cast(ShoppingData, hass.data[DOMAIN])
+        export_type = call.data.get("filetype", "json")
+        return await data.export_list(export_type)
 
     async def complete_item_service(call: ServiceCall) -> None:
         """Mark the first item with matching `name` as completed."""
@@ -143,7 +151,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     data = hass.data[DOMAIN] = ShoppingData(hass)
     await data.async_load()
     hass.services.async_register(
-        DOMAIN, SERVICE_EXPORT, export_list_service, schema=SERVICE_EXPORT_SCHEMA
+        DOMAIN,
+        SERVICE_EXPORT,
+        export_list_service,
+        schema=SERVICE_EXPORT_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_ITEM, add_item_service, schema=SERVICE_ITEM_SCHEMA
@@ -342,41 +354,45 @@ class ShoppingData:
         )
         return self.items
 
-    async def export_list(self, option: str = "json") -> None:
-        """Export the shopping list to csv, json or pdf."""
-        # Use the hass config path for www directory
-        www_dir = self.hass.config.path("www")
-
-        def ensure_www_dir() -> None:
-            """Ensure www directory exists."""
-            os.makedirs(www_dir, exist_ok=True)
-
-        # Create www directory if it doesn't exist
-        await self.hass.async_add_executor_job(ensure_www_dir)
-
-        path = f"{www_dir}/shopping_list"
-
+    async def export_list(self, option: str = "json") -> dict[str, Any]:
+        """Export the shopping list to csv, json or pdf and return the data."""
         if option == "json":
-            await self.hass.async_add_executor_job(
-                save_json, f"{path}.json", self.items
-            )
-        elif option == "csv":
 
-            def write_csv() -> None:
-                """Write CSV file synchronously."""
-                with open(f"{path}.csv", "w", newline="", encoding="utf-8") as csvfile:
-                    headers = ["name", "id", "complete"]
-                    writer = csv.DictWriter(csvfile, fieldnames=headers)
-                    writer.writeheader()
-                    writer.writerows(self.items)
+            def create_json() -> str:
+                """Create JSON string."""
+                return json.dumps(self.items, indent=2)
 
-            await self.hass.async_add_executor_job(write_csv)
-        elif option == "pdf":
+            content = await self.hass.async_add_executor_job(create_json)
+            return {
+                "content": content,
+                "filename": "shopping_list.json",
+                "mime_type": "application/json",
+            }
 
-            def write_pdf() -> None:
-                """Write PDF file synchronously."""
-                pdf_path = f"{path}.pdf"
-                doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+        if option == "csv":
+
+            def create_csv() -> str:
+                """Create CSV string."""
+                output = StringIO()
+                headers = ["name", "id", "complete"]
+                writer = csv.DictWriter(output, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(self.items)
+                return output.getvalue()
+
+            content = await self.hass.async_add_executor_job(create_csv)
+            return {
+                "content": content,
+                "filename": "shopping_list.csv",
+                "mime_type": "text/csv",
+            }
+
+        if option == "pdf":
+
+            def create_pdf() -> bytes:
+                """Create PDF bytes."""
+                buffer = BytesIO()
+                doc = SimpleDocTemplate(buffer, pagesize=letter)
                 elements = []
 
                 # Add title
@@ -411,8 +427,19 @@ class ShoppingData:
 
                 # Build PDF
                 doc.build(elements)
+                return buffer.getvalue()
 
-            await self.hass.async_add_executor_job(write_pdf)
+            content_bytes = await self.hass.async_add_executor_job(create_pdf)
+            # Encode bytes to base64 for transmission
+            content = base64.b64encode(content_bytes).decode("utf-8")
+            return {
+                "content": content,
+                "filename": "shopping_list.pdf",
+                "mime_type": "application/pdf",
+                "encoding": "base64",
+            }
+
+        raise ValueError(f"Unsupported export format: {option}")
 
     @callback
     def async_reorder(
@@ -589,15 +616,19 @@ def websocket_handle_items(
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): "shopping_list/export", vol.Optional("filetype"): str}
+    {
+        vol.Required("type"): "shopping_list/export",
+        vol.Optional("filetype", default="json"): str,
+    }
 )
 @websocket_api.async_response
 async def websocket_handle_export(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
     """Handle exporting shopping list to csv,json,pdf."""
-    await hass.data[DOMAIN].export_list()
-    connection.send_message(websocket_api.result_message(msg["id"]))
+    filetype = msg.get("filetype", "json")
+    result = await hass.data[DOMAIN].export_list(filetype)
+    connection.send_message(websocket_api.result_message(msg["id"], result))
 
 
 @websocket_api.websocket_command(
