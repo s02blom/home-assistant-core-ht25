@@ -36,7 +36,7 @@ from .const import (
     SERVICE_REMOVE_ITEM,
     SERVICE_SORT,
 )
-from .recommendations import recommender  # type: ignore[reportMissingImports]
+from .recommendations import recommender
 
 PLATFORMS = [Platform.TODO]
 
@@ -417,7 +417,7 @@ class ShoppingData:
         # Update co-occurrence data for recommendations
         try:
             # Only consider active (incomplete) items
-            active_items = [
+            active_items: list[str] = [
                 i["name"]
                 for i in self.items
                 if isinstance(i.get("name"), str) and not i.get("complete")
