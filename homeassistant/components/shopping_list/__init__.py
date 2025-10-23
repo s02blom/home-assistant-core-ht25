@@ -414,7 +414,6 @@ class ShoppingData:
         """Save the items and update recommendations."""
         save_json(self.hass.config.path(PERSISTENCE), self.items)
 
-        # Update co-occurrence data for recommendations
         try:
             # Only consider active (incomplete) items
             active_items: list[str] = [
@@ -422,12 +421,12 @@ class ShoppingData:
                 for i in self.items
                 if isinstance(i.get("name"), str) and not i.get("complete")
             ]
-
-            # Only record relationships if there are at least two active items
             if len(active_items) > 1:
                 recommender.observe_list(active_items)
+            else:
+                _LOGGER.warning("Not enough active items to learn co-occurrence")
 
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             _LOGGER.warning("Failed to update shopping recommendations: %s", err)
 
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
