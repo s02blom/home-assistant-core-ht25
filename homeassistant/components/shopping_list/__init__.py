@@ -416,8 +416,8 @@ class ShoppingData:
 
         try:
             # Only consider active (incomplete) items
-            active_items: list[str] = [
-                i["name"]
+            active_items = [
+                cast(str, i["name"])
                 for i in self.items
                 if isinstance(i.get("name"), str) and not i.get("complete")
             ]
