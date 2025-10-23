@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 import json
+import os
 from pathlib import Path
+import tempfile
 
-# Dynamically point to the Home Assistant config storage directory
-STORAGE_PATH = Path("/config/.storage/shopping_recommendations.json")
+if os.access("/config", os.W_OK):
+    STORAGE_DIR = Path("/config/.storage")
+else:
+    STORAGE_DIR = Path(tempfile.gettempdir()) / ".storage"
+
+STORAGE_PATH = STORAGE_DIR / "shopping_recommendations.json"
 
 
 class ShoppingRecommender:
@@ -36,6 +42,7 @@ class ShoppingRecommender:
 
     def _save(self) -> None:
         """Save co-occurrence data to storage."""
+        STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)  # check if exists
         STORAGE_PATH.write_text(
             json.dumps({k: dict(v) for k, v in self.cooccur.items()}, indent=2),
             encoding="utf-8",
