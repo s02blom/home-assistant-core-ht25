@@ -43,13 +43,22 @@ ATTR_COMPLETE = "complete"
 
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = vol.Schema({DOMAIN: {}}, extra=vol.ALLOW_EXTRA)
-ITEM_UPDATE_SCHEMA = vol.Schema({ATTR_COMPLETE: bool, ATTR_NAME: str})
+ITEM_UPDATE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_COMPLETE): bool,
+        vol.Optional(ATTR_NAME): str,
+        vol.Optional("description"): str,
+    }
+)
 PERSISTENCE = ".shopping_list.json"
 
 SERVICE_ITEM_SCHEMA = vol.Schema({vol.Required(ATTR_NAME): cv.string})
 SERVICE_LIST_SCHEMA = vol.Schema({})
 SERVICE_SORT_SCHEMA = vol.Schema(
-    {vol.Optional(ATTR_REVERSE, default=DEFAULT_REVERSE): bool}
+    {
+        vol.Optional(ATTR_REVERSE, default=DEFAULT_REVERSE): bool,
+        vol.Optional("by", default="name"): vol.In(["name", "description"]),
+    }
 )
 
 
@@ -122,8 +131,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         await data.async_clear_completed()
 
     async def sort_list_service(call: ServiceCall) -> None:
-        """Sort all items by name."""
-        await data.async_sort(call.data[ATTR_REVERSE])
+        """Sort all items by name or description."""
+        await data.async_sort(call.data[ATTR_REVERSE], call.data["by"])
 
     data = hass.data[DOMAIN] = ShoppingData(hass)
     await data.async_load()
@@ -199,14 +208,20 @@ class ShoppingData:
         self._listeners: list[Callable[[], None]] = []
 
     async def async_add(
-        self, name: str | None, complete: bool = False, context: Context | None = None
+        self,
+        name: str | None,
+        complete: bool = False,
+        description: str = "",
+        context: Context | None = None,
     ) -> dict[str, JsonValueType]:
         """Add a shopping list item."""
         item: dict[str, JsonValueType] = {
             "name": name,
             "id": uuid.uuid4().hex,
             "complete": complete,
+            "description": description,
         }
+
         self.items.append(item)
         await self.hass.async_add_executor_job(self.save)
         self._async_notify()
@@ -384,15 +399,22 @@ class ShoppingData:
         )
 
     async def async_sort(
-        self, reverse: bool = False, context: Context | None = None
+        self,
+        reverse: bool = False,
+        by: str = "name",
+        context: Context | None = None,
     ) -> None:
-        """Sort items by name."""
-        self.items = sorted(self.items, key=lambda item: item["name"], reverse=reverse)  # type: ignore[arg-type,return-value]
-        self.hass.async_add_executor_job(self.save)
+        """Sort items by name or description."""
+        self.items = sorted(
+            self.items,
+            key=lambda item: str(item.get(by, "") or "").lower(),
+            reverse=reverse,
+        )
+        await self.hass.async_add_executor_job(self.save)
         self._async_notify()
         self.hass.bus.async_fire(
             EVENT_SHOPPING_LIST_UPDATED,
-            {"action": "sorted"},
+            {"action": f"sorted_by_{by}"},
             context=context,
         )
 
@@ -465,11 +487,20 @@ class CreateShoppingListItemView(http.HomeAssistantView):
     url = "/api/shopping_list/item"
     name = "api:shopping_list:item"
 
-    @RequestDataValidator(vol.Schema({vol.Required("name"): str}))
+    @RequestDataValidator(
+        vol.Schema(
+            {
+                vol.Required("name"): str,
+                vol.Optional("description", default=""): str,
+            }
+        )
+    )
     async def post(self, request: web.Request, data: dict[str, str]) -> web.Response:
         """Create a new shopping list item."""
         hass = request.app[http.KEY_HASS]
-        item = await hass.data[DOMAIN].async_add(data["name"])
+        item = await hass.data[DOMAIN].async_add(
+            data["name"], description=data.get("description", "")
+        )
         return self.json(item)
 
 
@@ -546,6 +577,7 @@ async def websocket_handle_remove(
         vol.Required("item_id"): str,
         vol.Optional("name"): str,
         vol.Optional("complete"): bool,
+        vol.Optional("description"): str,
     }
 )
 @websocket_api.async_response
