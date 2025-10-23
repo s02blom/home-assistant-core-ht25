@@ -1,6 +1,7 @@
 """Support to manage a shopping list."""
 
 from __future__ import annotations
+from json import JSONDecodeError
 
 from collections.abc import Callable
 from http import HTTPStatus
@@ -426,7 +427,7 @@ class ShoppingData:
             else:
                 _LOGGER.warning("Not enough active items to learn co-occurrence")
 
-        except Exception as err:
+        except (OSError, JSONDecodeError, TypeError) as err:
             _LOGGER.warning("Failed to update shopping recommendations: %s", err)
 
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
