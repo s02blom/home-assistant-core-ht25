@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable, Iterable
+import csv
 import dataclasses
 import datetime
+from io import BytesIO, StringIO
 import logging
 from typing import Any, final
 
 from propcache.api import cached_property
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import voluptuous as vol
 
 from homeassistant.components import frontend, websocket_api
@@ -129,6 +137,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, websocket_handle_subscribe_todo_items)
     websocket_api.async_register_command(hass, websocket_handle_todo_item_list)
     websocket_api.async_register_command(hass, websocket_handle_todo_item_move)
+    websocket_api.async_register_command(hass, websocket_handle_export)
 
     component.async_register_entity_service(
         TodoServices.ADD_ITEM,
@@ -192,6 +201,19 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         None,
         _async_remove_completed_items,
         required_features=[TodoListEntityFeature.DELETE_TODO_ITEM],
+    )
+
+    component.async_register_entity_service(
+        name=TodoServices.SERVICE_EXPORT,
+        schema=cv.make_entity_service_schema(
+            {
+                vol.Optional("filetype", default="json"): vol.In(
+                    ["json", "csv", "pdf"]
+                ),
+            }
+        ),
+        func=export_list_service,
+        supports_response=SupportsResponse.ONLY,
     )
 
     await component.async_setup(config)
@@ -274,6 +296,131 @@ class TodoListEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
         position in the To-do list.
         """
         raise NotImplementedError
+
+    async def export_list(self, option: str = "json") -> dict[str, Any]:
+        """Export the todo list to csv, json or pdf and return the data."""
+        if option == "json":
+            return await self._export_as_json()
+        if option == "csv":
+            return await self._export_as_csv()
+        if option == "pdf":
+            return await self._export_as_pdf()
+        raise ValueError(f"Unsupported export format: {option}")
+
+    async def _export_as_json(self) -> dict[str, Any]:
+        """Export the todo list as JSON."""
+
+        def create_json() -> list[dict[str, Any]]:
+            """Create JSON list."""
+            return [
+                dataclasses.asdict(item, dict_factory=_api_items_factory)
+                for item in self.todo_items or []
+            ]
+
+        json_content: list[dict[str, Any]] = await self.hass.async_add_executor_job(
+            create_json
+        )
+        return {
+            "content": json_content,
+            "filename": "todo_list.json",
+            "mime_type": "application/json",
+        }
+
+    async def _export_as_csv(self) -> dict[str, Any]:
+        """Export the todo list as CSV."""
+
+        def create_csv() -> str:
+            """Create CSV string."""
+            output = StringIO()
+            headers = ["summary", "uid", "status", "due", "description"]
+            writer = csv.DictWriter(output, fieldnames=headers)
+            writer.writeheader()
+            for item in self.todo_items or []:
+                item_dict = dataclasses.asdict(item, dict_factory=_api_items_factory)
+                writer.writerow(item_dict)
+            return output.getvalue()
+
+        csv_content: str = await self.hass.async_add_executor_job(create_csv)
+        return {
+            "content": csv_content,
+            "filename": "todo_list.csv",
+            "mime_type": "text/csv",
+        }
+
+    async def _export_as_pdf(self) -> dict[str, Any]:
+        """Export the todo list as PDF."""
+
+        def create_pdf() -> bytes:
+            """Create PDF bytes."""
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            elements = []
+
+            # Add title
+            styles = getSampleStyleSheet()
+            title = Paragraph("Todo List", styles["Title"])
+            elements.append(title)
+            elements.append(Spacer(1, 1 * cm))
+
+            # Create table with data
+            table_data = self._build_pdf_table_data()
+            table = Table(table_data, colWidths=[6 * cm, 3 * cm, 4 * cm, 7 * cm])
+            table.setStyle(self._get_pdf_table_style())
+            elements.append(table)
+
+            # Build PDF
+            doc.build(elements)
+            return buffer.getvalue()
+
+        pdf_bytes: bytes = await self.hass.async_add_executor_job(create_pdf)
+        # Encode bytes to base64 for transmission
+        pdf_content: str = base64.b64encode(pdf_bytes).decode("utf-8")
+        return {
+            "content": pdf_content,
+            "filename": "todo_list.pdf",
+            "mime_type": "application/pdf",
+            "encoding": "base64",
+        }
+
+    def _build_pdf_table_data(self) -> list[list[str]]:
+        """Build table data for PDF export."""
+        table_data = [["Item", "Status", "Due", "Description"]]
+        for item in self.todo_items or []:
+            status = (
+                "Completed"
+                if item.status == TodoItemStatus.COMPLETED
+                else "Needs Action"
+            )
+            due_str = item.due.isoformat() if item.due else ""
+            description = item.description or ""
+            # Truncate long descriptions for PDF display
+            if len(description) > 50:
+                description = description[:47] + "..."
+            table_data.append(
+                [
+                    (item.summary or ""),
+                    status,
+                    due_str,
+                    description,
+                ]
+            )
+        return table_data
+
+    def _get_pdf_table_style(self) -> TableStyle:
+        """Get the table style for PDF export."""
+        return TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 12),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
+                ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
 
     @final
     @callback
@@ -406,6 +553,42 @@ async def websocket_handle_todo_item_list(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): "todo/export",
+        vol.Required("entity_id"): cv.entity_domain(DOMAIN),
+        vol.Optional("filetype", default="json"): vol.In(["json", "csv", "pdf"]),
+    }
+)
+@websocket_api.async_response
+async def websocket_handle_export(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Handle exporting a To-do list."""
+    entity_id: str = msg["entity_id"]
+    filetype: str = msg.get("filetype", "json")
+
+    entity = hass.data[DATA_COMPONENT].get_entity(entity_id)
+    if not entity or not isinstance(entity, TodoListEntity):
+        connection.send_error(
+            msg["id"], ERR_NOT_FOUND, f"Entity not found: {entity_id}"
+        )
+        return
+
+    try:
+        result: dict[str, Any] = await entity.export_list(option=filetype)
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "failed", str(err))
+        return
+
+    connection.send_message(websocket_api.result_message(msg["id"], result))
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): "todo/item/move",
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("uid"): cv.string,
@@ -526,6 +709,14 @@ async def _async_get_todo_items(
             if not (statuses := call.data.get("status")) or item.status in statuses
         ]
     }
+
+
+async def export_list_service(
+    entity: TodoListEntity, call: ServiceCall
+) -> dict[str, Any]:
+    """Export the todo list to csv, json or pdf and return the data."""
+    filetype: str = call.data.get("filetype", "json")
+    return await entity.export_list(option=filetype)
 
 
 async def _async_remove_completed_items(entity: TodoListEntity, _: ServiceCall) -> None:

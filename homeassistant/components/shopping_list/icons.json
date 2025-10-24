@@ -30,6 +30,9 @@
     },
     "sort": {
       "service": "mdi:sort"
+    },
+    "export": {
+      "service": "mdi:download"
     }
   }
 }
