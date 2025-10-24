@@ -39,6 +39,7 @@ class ShoppingTodoListEntity(TodoListEntity):
         | TodoListEntityFeature.DELETE_TODO_ITEM
         | TodoListEntityFeature.UPDATE_TODO_ITEM
         | TodoListEntityFeature.MOVE_TODO_ITEM
+        | TodoListEntityFeature.SET_DESCRIPTION_ON_ITEM
     )
 
     def __init__(self, data: ShoppingData, unique_id: str) -> None:
@@ -49,7 +50,9 @@ class ShoppingTodoListEntity(TodoListEntity):
     async def async_create_todo_item(self, item: TodoItem) -> None:
         """Add an item to the To-do list."""
         await self._data.async_add(
-            item.summary, complete=(item.status == TodoItemStatus.COMPLETED)
+            item.summary,
+            description=item.description or "",
+            complete=(item.status == TodoItemStatus.COMPLETED),
         )
 
     async def async_update_todo_item(self, item: TodoItem) -> None:
@@ -57,6 +60,7 @@ class ShoppingTodoListEntity(TodoListEntity):
         data = {
             "name": item.summary,
             "complete": item.status == TodoItemStatus.COMPLETED,
+            "description": item.description or "",
         }
         try:
             await self._data.async_update(item.uid, data)
@@ -100,6 +104,7 @@ class ShoppingTodoListEntity(TodoListEntity):
             results.append(
                 TodoItem(
                     summary=cast(str, item["name"]),
+                    description=str(item.get("description") or ""),
                     uid=cast(str, item["id"]),
                     status=status,
                 )

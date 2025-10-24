@@ -51,6 +51,7 @@ from .const import (
     SERVICE_REMOVE_ITEM,
     SERVICE_SORT,
 )
+from .recommendations import recommender
 
 PLATFORMS = [Platform.TODO]
 
@@ -58,13 +59,22 @@ ATTR_COMPLETE = "complete"
 
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = vol.Schema({DOMAIN: {}}, extra=vol.ALLOW_EXTRA)
-ITEM_UPDATE_SCHEMA = vol.Schema({ATTR_COMPLETE: bool, ATTR_NAME: str})
+ITEM_UPDATE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_COMPLETE): bool,
+        vol.Optional(ATTR_NAME): str,
+        vol.Optional("description"): str,
+    }
+)
 PERSISTENCE = ".shopping_list.json"
 
 SERVICE_ITEM_SCHEMA = vol.Schema({vol.Required(ATTR_NAME): cv.string})
 SERVICE_LIST_SCHEMA = vol.Schema({})
 SERVICE_SORT_SCHEMA = vol.Schema(
-    {vol.Optional(ATTR_REVERSE, default=DEFAULT_REVERSE): bool}
+    {
+        vol.Optional(ATTR_REVERSE, default=DEFAULT_REVERSE): bool,
+        vol.Optional("by", default="name"): vol.In(["name", "description"]),
+    }
 )
 SERVICE_EXPORT_SCHEMA = vol.Schema({vol.Optional("filetype", default="json"): str})
 
@@ -144,8 +154,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         await data.async_clear_completed()
 
     async def sort_list_service(call: ServiceCall) -> None:
-        """Sort all items by name."""
-        await data.async_sort(call.data[ATTR_REVERSE])
+        """Sort all items by name or description."""
+        await data.async_sort(call.data[ATTR_REVERSE], call.data["by"])
 
     data = hass.data[DOMAIN] = ShoppingData(hass)
     await data.async_load()
@@ -208,6 +218,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     websocket_api.async_register_command(hass, websocket_handle_clear)
     websocket_api.async_register_command(hass, websocket_handle_reorder)
     websocket_api.async_register_command(hass, websocket_handle_export)
+    websocket_api.async_register_command(hass, websocket_handle_recommendations)
+
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
     return True
@@ -227,14 +239,20 @@ class ShoppingData:
         self._listeners: list[Callable[[], None]] = []
 
     async def async_add(
-        self, name: str | None, complete: bool = False, context: Context | None = None
+        self,
+        name: str | None,
+        complete: bool = False,
+        description: str = "",
+        context: Context | None = None,
     ) -> dict[str, JsonValueType]:
         """Add a shopping list item."""
         item: dict[str, JsonValueType] = {
             "name": name,
             "id": uuid.uuid4().hex,
             "complete": complete,
+            "description": description,
         }
+
         self.items.append(item)
         await self.hass.async_add_executor_job(self.save)
         self._async_notify()
@@ -501,15 +519,22 @@ class ShoppingData:
         )
 
     async def async_sort(
-        self, reverse: bool = False, context: Context | None = None
+        self,
+        reverse: bool = False,
+        by: str = "name",
+        context: Context | None = None,
     ) -> None:
-        """Sort items by name."""
-        self.items = sorted(self.items, key=lambda item: item["name"], reverse=reverse)  # type: ignore[arg-type,return-value]
-        self.hass.async_add_executor_job(self.save)
+        """Sort items by name or description."""
+        self.items = sorted(
+            self.items,
+            key=lambda item: str(item.get(by, "") or "").lower(),
+            reverse=reverse,
+        )
+        await self.hass.async_add_executor_job(self.save)
         self._async_notify()
         self.hass.bus.async_fire(
             EVENT_SHOPPING_LIST_UPDATED,
-            {"action": "sorted"},
+            {"action": f"sorted_by_{by}"},
             context=context,
         )
 
@@ -526,8 +551,23 @@ class ShoppingData:
         self.items = await self.hass.async_add_executor_job(load)
 
     def save(self) -> None:
-        """Save the items."""
+        """Save the items and update recommendations."""
         save_json(self.hass.config.path(PERSISTENCE), self.items)
+
+        try:
+            # Only consider active (incomplete) items
+            active_items = [
+                cast(str, i["name"])
+                for i in self.items
+                if isinstance(i.get("name"), str) and not i.get("complete")
+            ]
+            if len(active_items) > 1:
+                recommender.observe_list(active_items)
+            else:
+                _LOGGER.warning("Not enough active items to learn co-occurrence")
+
+        except (ValueError, TypeError) as err:
+            _LOGGER.warning("Failed to update shopping recommendations: %s", err)
 
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         """Add a listener to notify when data is updated."""
@@ -582,11 +622,20 @@ class CreateShoppingListItemView(http.HomeAssistantView):
     url = "/api/shopping_list/item"
     name = "api:shopping_list:item"
 
-    @RequestDataValidator(vol.Schema({vol.Required("name"): str}))
+    @RequestDataValidator(
+        vol.Schema(
+            {
+                vol.Required("name"): str,
+                vol.Optional("description", default=""): str,
+            }
+        )
+    )
     async def post(self, request: web.Request, data: dict[str, str]) -> web.Response:
         """Create a new shopping list item."""
         hass = request.app[http.KEY_HASS]
-        item = await hass.data[DOMAIN].async_add(data["name"])
+        item = await hass.data[DOMAIN].async_add(
+            data["name"], description=data.get("description", "")
+        )
         return self.json(item)
 
 
@@ -679,6 +728,7 @@ async def websocket_handle_remove(
         vol.Required("item_id"): str,
         vol.Optional("name"): str,
         vol.Optional("complete"): bool,
+        vol.Optional("description"): str,
     }
 )
 @websocket_api.async_response
@@ -745,3 +795,21 @@ def websocket_handle_reorder(
         return
 
     connection.send_result(msg_id)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shopping_list/recommendations",
+        vol.Required("item"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_handle_recommendations(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return item recommendations for a given shopping list item."""
+    item = msg["item"]
+    suggestions = recommender.suggest(item)
+    connection.send_result(msg["id"], {"suggestions": suggestions})

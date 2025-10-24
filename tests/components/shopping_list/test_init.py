@@ -226,7 +226,7 @@ async def test_deprecated_api_update(
     assert resp.status == HTTPStatus.OK
     assert len(events) == 1
     data = await resp.json()
-    assert data == {"id": beer_id, "name": "soda", "complete": False}
+    assert data == {"id": beer_id, "name": "soda", "complete": False, "description": ""}
 
     resp = await client.post(
         f"/api/shopping_list/item/{wine_id}", json={"complete": True}
@@ -235,11 +235,11 @@ async def test_deprecated_api_update(
     assert resp.status == HTTPStatus.OK
     assert len(events) == 2
     data = await resp.json()
-    assert data == {"id": wine_id, "name": "wine", "complete": True}
+    assert data == {"id": wine_id, "name": "wine", "complete": True, "description": ""}
 
     beer, wine = hass.data["shopping_list"].items
-    assert beer == {"id": beer_id, "name": "soda", "complete": False}
-    assert wine == {"id": wine_id, "name": "wine", "complete": True}
+    assert beer == {"id": beer_id, "name": "soda", "complete": False, "description": ""}
+    assert wine == {"id": wine_id, "name": "wine", "complete": True, "description": ""}
 
 
 async def test_ws_update_item(
@@ -268,7 +268,7 @@ async def test_ws_update_item(
     msg = await client.receive_json()
     assert msg["success"] is True
     data = msg["result"]
-    assert data == {"id": beer_id, "name": "soda", "complete": False}
+    assert data == {"id": beer_id, "name": "soda", "complete": False, "description": ""}
     assert len(events) == 1
 
     await client.send_json(
@@ -282,12 +282,12 @@ async def test_ws_update_item(
     msg = await client.receive_json()
     assert msg["success"] is True
     data = msg["result"]
-    assert data == {"id": wine_id, "name": "wine", "complete": True}
+    assert data == {"id": wine_id, "name": "wine", "complete": True, "description": ""}
     assert len(events) == 2
 
     beer, wine = hass.data["shopping_list"].items
-    assert beer == {"id": beer_id, "name": "soda", "complete": False}
-    assert wine == {"id": wine_id, "name": "wine", "complete": True}
+    assert beer == {"id": beer_id, "name": "soda", "complete": False, "description": ""}
+    assert wine == {"id": wine_id, "name": "wine", "complete": True, "description": ""}
 
 
 async def test_api_update_fails(
@@ -373,7 +373,12 @@ async def test_deprecated_api_clear_completed(
     items = hass.data["shopping_list"].items
     assert len(items) == 1
 
-    assert items[0] == {"id": wine_id, "name": "wine", "complete": False}
+    assert items[0] == {
+        "id": wine_id,
+        "name": "wine",
+        "complete": False,
+        "description": "",
+    }
 
 
 async def test_ws_clear_items(
@@ -407,7 +412,12 @@ async def test_ws_clear_items(
     assert msg["success"] is True
     items = hass.data["shopping_list"].items
     assert len(items) == 1
-    assert items[0] == {"id": wine_id, "name": "wine", "complete": False}
+    assert items[0] == {
+        "id": wine_id,
+        "name": "wine",
+        "complete": False,
+        "description": "",
+    }
     assert len(events) == 2
 
 
@@ -558,16 +568,19 @@ async def test_ws_reorder_items(
         "id": wine_id,
         "name": "wine",
         "complete": False,
+        "description": "",
     }
     assert hass.data["shopping_list"].items[1] == {
         "id": apple_id,
         "name": "apple",
         "complete": False,
+        "description": "",
     }
     assert hass.data["shopping_list"].items[2] == {
         "id": beer_id,
         "name": "beer",
         "complete": False,
+        "description": "",
     }
 
     # Mark wine as completed.
@@ -596,16 +609,19 @@ async def test_ws_reorder_items(
         "id": apple_id,
         "name": "apple",
         "complete": False,
+        "description": "",
     }
     assert hass.data["shopping_list"].items[1] == {
         "id": beer_id,
         "name": "beer",
         "complete": False,
+        "description": "",
     }
     assert hass.data["shopping_list"].items[2] == {
         "id": wine_id,
         "name": "wine",
         "complete": True,
+        "description": "",
     }
 
 
