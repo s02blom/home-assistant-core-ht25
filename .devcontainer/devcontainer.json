@@ -26,6 +26,9 @@
     "--security-opt",
     "label=disable"
   ],
+  "mounts": [
+    "source=${localWorkspaceFolder}/../home-assistant-frontend-ht25,target=/workspaces/frontend,type=bind"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
