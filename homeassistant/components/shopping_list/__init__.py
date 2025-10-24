@@ -7,7 +7,7 @@ from http import HTTPStatus
 import logging
 from typing import Any, cast
 import uuid
-
+from datetime import datetime, timezone
 from aiohttp import web
 import voluptuous as vol
 
@@ -35,6 +35,7 @@ from .const import (
     SERVICE_INCOMPLETE_ITEM,
     SERVICE_REMOVE_ITEM,
     SERVICE_SORT,
+    SERVICE_SORT_BY_DATE,
 )
 
 PLATFORMS = [Platform.TODO]
@@ -125,6 +126,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         """Sort all items by name."""
         await data.async_sort(call.data[ATTR_REVERSE])
 
+    async def sort_by_date_service(call: ServiceCall) -> None:
+        """Sort all items by creation date."""
+        await data.async_sort_by_date(call.data[ATTR_REVERSE])
+
     data = hass.data[DOMAIN] = ShoppingData(hass)
     await data.async_load()
 
@@ -167,6 +172,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         sort_list_service,
         schema=SERVICE_SORT_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SORT_BY_DATE,
+        sort_by_date_service,
+        schema=SERVICE_SORT_SCHEMA,
+    )
 
     hass.http.register_view(ShoppingListView)
     hass.http.register_view(CreateShoppingListItemView)
@@ -206,6 +217,7 @@ class ShoppingData:
             "name": name,
             "id": uuid.uuid4().hex,
             "complete": complete,
+            "created": datetime.now(timezone.utc).isoformat(),
         }
         self.items.append(item)
         await self.hass.async_add_executor_job(self.save)
@@ -393,6 +405,23 @@ class ShoppingData:
         self.hass.bus.async_fire(
             EVENT_SHOPPING_LIST_UPDATED,
             {"action": "sorted"},
+            context=context,
+        )
+
+    async def async_sort_by_date(
+        self, reverse: bool = False, context: Context | None = None
+    ) -> None:
+        """Sort items by creation date."""
+        self.items = sorted(
+            self.items,
+            key=lambda item: str(item.get("created", "9999-99-99")),
+            reverse=reverse,
+        )
+        self.hass.async_add_executor_job(self.save)
+        self._async_notify()
+        self.hass.bus.async_fire(
+            EVENT_SHOPPING_LIST_UPDATED,
+            {"action": "sorted_by_date"},
             context=context,
         )
 
