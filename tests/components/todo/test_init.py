@@ -1,5 +1,7 @@
 """Tests for the todo integration."""
 
+import base64
+import csv
 import datetime
 from typing import Any
 import zoneinfo
@@ -21,6 +23,7 @@ from homeassistant.components.todo import (
     TodoListEntityFeature,
     TodoServices,
 )
+from homeassistant.components.websocket_api import TYPE_RESULT
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_SUPPORTED_FEATURES
 from homeassistant.core import HomeAssistant
@@ -1226,3 +1229,563 @@ async def test_list_todo_items_extended_fields(
             ]
         }
     }
+
+
+async def test_export_list_service_json(
+    hass: HomeAssistant, test_entity: TodoListEntity
+) -> None:
+    """Test exporting todo list to json format via service."""
+    await create_mock_platform(hass, [test_entity])
+
+    # Test export with json format (default)
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "json"},
+        target={ATTR_ENTITY_ID: "todo.entity1"},
+        blocking=True,
+        return_response=True,
+    )
+
+    # Verify the response structure
+    assert "todo.entity1" in response
+    result = response["todo.entity1"]
+    assert "content" in result
+    assert "filename" in result
+    assert "mime_type" in result
+    assert result["filename"] == "todo_list.json"
+    assert result["mime_type"] == "application/json"
+
+    # Verify the exported data (content is the actual list, not a JSON string)
+    exported_data = result["content"]
+    assert isinstance(exported_data, list)
+    assert len(exported_data) == 2
+    assert any(
+        item["summary"] == "Item #1" and item["status"] == "needs_action"
+        for item in exported_data
+    )
+    assert any(
+        item["summary"] == "Item #2" and item["status"] == "completed"
+        for item in exported_data
+    )
+
+
+async def test_export_list_service_csv(
+    hass: HomeAssistant, test_entity: TodoListEntity
+) -> None:
+    """Test exporting todo list to csv format via service."""
+    await create_mock_platform(hass, [test_entity])
+
+    # Test export with csv format
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "csv"},
+        target={ATTR_ENTITY_ID: "todo.entity1"},
+        blocking=True,
+        return_response=True,
+    )
+
+    # Verify the response structure
+    assert "todo.entity1" in response
+    result = response["todo.entity1"]
+    assert "content" in result
+    assert "filename" in result
+    assert "mime_type" in result
+    assert result["filename"] == "todo_list.csv"
+    assert result["mime_type"] == "text/csv"
+
+    # Parse and verify the CSV content
+    csv_content = result["content"]
+    reader = csv.DictReader(csv_content.splitlines())
+    rows = list(reader)
+
+    assert len(rows) == 2
+    assert any(
+        row["summary"] == "Item #1" and row["status"] == "needs_action" for row in rows
+    )
+    assert any(
+        row["summary"] == "Item #2" and row["status"] == "completed" for row in rows
+    )
+
+
+async def test_export_list_service_pdf(
+    hass: HomeAssistant, test_entity: TodoListEntity
+) -> None:
+    """Test exporting todo list to pdf format via service."""
+    await create_mock_platform(hass, [test_entity])
+
+    # Test export with pdf format
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "pdf"},
+        target={ATTR_ENTITY_ID: "todo.entity1"},
+        blocking=True,
+        return_response=True,
+    )
+
+    # Verify the response structure
+    assert "todo.entity1" in response
+    result = response["todo.entity1"]
+    assert "content" in result
+    assert "filename" in result
+    assert "mime_type" in result
+    assert "encoding" in result
+    assert result["filename"] == "todo_list.pdf"
+    assert result["mime_type"] == "application/pdf"
+    assert result["encoding"] == "base64"
+
+    # Decode and verify it's a valid PDF (starts with PDF magic bytes)
+    pdf_content = base64.b64decode(result["content"])
+    assert pdf_content[:4] == b"%PDF"
+
+
+async def test_export_empty_list_json(
+    hass: HomeAssistant, test_entity_items: list[TodoItem]
+) -> None:
+    """Test exporting empty todo list to json format."""
+    empty_entity = TodoListEntity()
+    empty_entity.entity_id = "todo.empty"
+    empty_entity._attr_todo_items = []
+    await create_mock_platform(hass, [empty_entity])
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "json"},
+        target={ATTR_ENTITY_ID: "todo.empty"},
+        blocking=True,
+        return_response=True,
+    )
+
+    # Verify the response structure
+    assert "todo.empty" in response
+    result = response["todo.empty"]
+    assert "content" in result
+    assert result["filename"] == "todo_list.json"
+    assert result["mime_type"] == "application/json"
+
+    # Verify empty list
+    exported_data = result["content"]
+    assert isinstance(exported_data, list)
+    assert len(exported_data) == 0
+
+
+async def test_export_empty_list_csv(
+    hass: HomeAssistant, test_entity_items: list[TodoItem]
+) -> None:
+    """Test exporting empty todo list to csv format."""
+    empty_entity = TodoListEntity()
+    empty_entity.entity_id = "todo.empty"
+    empty_entity._attr_todo_items = []
+    await create_mock_platform(hass, [empty_entity])
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "csv"},
+        target={ATTR_ENTITY_ID: "todo.empty"},
+        blocking=True,
+        return_response=True,
+    )
+
+    # Verify the response structure
+    assert "todo.empty" in response
+    result = response["todo.empty"]
+    assert result["filename"] == "todo_list.csv"
+    assert result["mime_type"] == "text/csv"
+
+    # Parse and verify the CSV has headers but no data rows
+    csv_content = result["content"]
+    lines = csv_content.strip().split("\n")
+    assert len(lines) == 1  # Only header line
+    assert "summary,uid,status,due,description" in lines[0]
+
+
+async def test_export_empty_list_pdf(
+    hass: HomeAssistant, test_entity_items: list[TodoItem]
+) -> None:
+    """Test exporting empty todo list to pdf format."""
+    empty_entity = TodoListEntity()
+    empty_entity.entity_id = "todo.empty"
+    empty_entity._attr_todo_items = []
+    await create_mock_platform(hass, [empty_entity])
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "pdf"},
+        target={ATTR_ENTITY_ID: "todo.empty"},
+        blocking=True,
+        return_response=True,
+    )
+
+    # Verify the response structure
+    assert "todo.empty" in response
+    result = response["todo.empty"]
+    assert "content" in result
+    assert "encoding" in result
+    assert result["filename"] == "todo_list.pdf"
+    assert result["mime_type"] == "application/pdf"
+    assert result["encoding"] == "base64"
+
+    # Decode and verify it's still a valid PDF
+    pdf_content = base64.b64decode(result["content"])
+    assert pdf_content[:4] == b"%PDF"
+
+
+async def test_export_list_with_extended_fields(
+    hass: HomeAssistant, test_entity_items: list[TodoItem]
+) -> None:
+    """Test exporting todo list with due dates and descriptions."""
+    entity_with_details = TodoListEntity()
+    entity_with_details.entity_id = "todo.detailed"
+    entity_with_details._attr_todo_items = [
+        TodoItem(
+            summary="Buy groceries",
+            uid="1",
+            status=TodoItemStatus.NEEDS_ACTION,
+            due=datetime.date(2024, 12, 25),
+            description="Milk, eggs, and bread",
+        ),
+        TodoItem(
+            summary="Call dentist",
+            uid="2",
+            status=TodoItemStatus.COMPLETED,
+            due=datetime.date(2024, 12, 20),
+            description="Schedule checkup appointment",
+        ),
+    ]
+    await create_mock_platform(hass, [entity_with_details])
+
+    # Test JSON export with extended fields
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "json"},
+        target={ATTR_ENTITY_ID: "todo.detailed"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "todo.detailed" in response
+    result = response["todo.detailed"]
+    exported_data = result["content"]
+    assert len(exported_data) == 2
+    assert any(
+        item["summary"] == "Buy groceries"
+        and item["due"] == "2024-12-25"
+        and item["description"] == "Milk, eggs, and bread"
+        for item in exported_data
+    )
+
+    # Test CSV export with extended fields
+    response_csv = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "csv"},
+        target={ATTR_ENTITY_ID: "todo.detailed"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "todo.detailed" in response_csv
+    csv_result = response_csv["todo.detailed"]
+    csv_content = csv_result["content"]
+    reader = csv.DictReader(csv_content.splitlines())
+    rows = list(reader)
+
+    assert len(rows) == 2
+    assert any(
+        row["summary"] == "Buy groceries"
+        and row["due"] == "2024-12-25"
+        and row["description"] == "Milk, eggs, and bread"
+        for row in rows
+    )
+
+
+async def test_export_list_special_characters(
+    hass: HomeAssistant, test_entity_items: list[TodoItem]
+) -> None:
+    """Test exporting todo list with special characters and unicode."""
+    entity_with_special = TodoListEntity()
+    entity_with_special.entity_id = "todo.special"
+    entity_with_special._attr_todo_items = [
+        TodoItem(
+            summary='Test "quotes" & special chars',
+            uid="1",
+            status=TodoItemStatus.NEEDS_ACTION,
+            description="Café, naïve, résumé 你好",
+        ),
+        TodoItem(
+            summary="Emoji test 🎉🎊",
+            uid="2",
+            status=TodoItemStatus.COMPLETED,
+            description="Unicode: ñ, ü, ö",
+        ),
+    ]
+    await create_mock_platform(hass, [entity_with_special])
+
+    # Test JSON export preserves special characters
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "json"},
+        target={ATTR_ENTITY_ID: "todo.special"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "todo.special" in response
+    result = response["todo.special"]
+    exported_data = result["content"]
+    assert any(
+        item["summary"] == 'Test "quotes" & special chars'
+        and "Café" in item["description"]
+        for item in exported_data
+    )
+    assert any(item["summary"] == "Emoji test 🎉🎊" for item in exported_data)
+
+    # Test CSV export handles special characters
+    response_csv = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "csv"},
+        target={ATTR_ENTITY_ID: "todo.special"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "todo.special" in response_csv
+    csv_result = response_csv["todo.special"]
+    csv_content = csv_result["content"]
+    reader = csv.DictReader(csv_content.splitlines())
+    rows = list(reader)
+
+    assert len(rows) == 2
+    assert any('Test "quotes"' in row["summary"] for row in rows)
+
+
+async def test_export_large_list(
+    hass: HomeAssistant, test_entity_items: list[TodoItem]
+) -> None:
+    """Test exporting a large todo list (100 items)."""
+    large_entity = TodoListEntity()
+    large_entity.entity_id = "todo.large"
+    large_entity._attr_todo_items = [
+        TodoItem(
+            summary=f"Item {i}",
+            uid=str(i),
+            status=(
+                TodoItemStatus.COMPLETED if i % 3 == 0 else TodoItemStatus.NEEDS_ACTION
+            ),
+        )
+        for i in range(100)
+    ]
+    await create_mock_platform(hass, [large_entity])
+
+    # Test JSON export with large list
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "json"},
+        target={ATTR_ENTITY_ID: "todo.large"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "todo.large" in response
+    result = response["todo.large"]
+    exported_data = result["content"]
+    assert len(exported_data) == 100
+    assert all("summary" in item for item in exported_data)
+
+    # Test CSV export with large list
+    response_csv = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "csv"},
+        target={ATTR_ENTITY_ID: "todo.large"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "todo.large" in response_csv
+    csv_result = response_csv["todo.large"]
+    csv_content = csv_result["content"]
+    reader = csv.DictReader(csv_content.splitlines())
+    rows = list(reader)
+    assert len(rows) == 100
+
+
+async def test_ws_export_list(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    test_entity: TodoListEntity,
+) -> None:
+    """Test exporting todo list via websocket command."""
+    await create_mock_platform(hass, [test_entity])
+
+    client = await hass_ws_client(hass)
+
+    # Test websocket export (defaults to json)
+    await client.send_json(
+        {"id": 10, "type": "todo/export", "entity_id": "todo.entity1"}
+    )
+    msg = await client.receive_json()
+
+    assert msg["success"] is True
+    assert msg["id"] == 10
+    assert msg["type"] == TYPE_RESULT
+
+    # Verify the response contains the export data
+    result = msg["result"]
+    assert "content" in result
+    assert "filename" in result
+    assert "mime_type" in result
+    assert result["filename"] == "todo_list.json"
+    assert result["mime_type"] == "application/json"
+
+    # Verify the exported data
+    exported_data = result["content"]
+    assert isinstance(exported_data, list)
+    assert len(exported_data) == 2
+    assert any(item["summary"] == "Item #1" for item in exported_data)
+    assert any(item["summary"] == "Item #2" for item in exported_data)
+
+
+async def test_ws_export_list_csv(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    test_entity: TodoListEntity,
+) -> None:
+    """Test exporting todo list as CSV via websocket command."""
+    await create_mock_platform(hass, [test_entity])
+
+    client = await hass_ws_client(hass)
+
+    # Test websocket export with CSV format
+    await client.send_json(
+        {
+            "id": 11,
+            "type": "todo/export",
+            "entity_id": "todo.entity1",
+            "filetype": "csv",
+        }
+    )
+    msg = await client.receive_json()
+
+    assert msg["success"] is True
+    assert msg["id"] == 11
+    assert msg["type"] == TYPE_RESULT
+
+    # Verify the response contains the export data
+    result = msg["result"]
+    assert "content" in result
+    assert "filename" in result
+    assert "mime_type" in result
+    assert result["filename"] == "todo_list.csv"
+    assert result["mime_type"] == "text/csv"
+
+    # Parse and verify the CSV data
+    csv_content = result["content"]
+    reader = csv.DictReader(csv_content.splitlines())
+    rows = list(reader)
+
+    assert len(rows) == 2
+    assert any(row["summary"] == "Item #1" for row in rows)
+    assert any(row["summary"] == "Item #2" for row in rows)
+
+
+async def test_ws_export_list_pdf(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    test_entity: TodoListEntity,
+) -> None:
+    """Test exporting todo list as PDF via websocket command."""
+    await create_mock_platform(hass, [test_entity])
+
+    client = await hass_ws_client(hass)
+
+    # Test websocket export with PDF format
+    await client.send_json(
+        {
+            "id": 12,
+            "type": "todo/export",
+            "entity_id": "todo.entity1",
+            "filetype": "pdf",
+        }
+    )
+    msg = await client.receive_json()
+
+    assert msg["success"] is True
+    assert msg["id"] == 12
+    assert msg["type"] == TYPE_RESULT
+
+    # Verify the response contains the export data
+    result = msg["result"]
+    assert "content" in result
+    assert "filename" in result
+    assert "mime_type" in result
+    assert "encoding" in result
+    assert result["filename"] == "todo_list.pdf"
+    assert result["mime_type"] == "application/pdf"
+    assert result["encoding"] == "base64"
+
+    # Decode and verify it's a valid PDF
+    pdf_content = base64.b64decode(result["content"])
+    assert pdf_content[:4] == b"%PDF"
+
+
+async def test_export_mixed_completion_status(
+    hass: HomeAssistant, test_entity_items: list[TodoItem]
+) -> None:
+    """Test exporting todo list with mixed completion statuses."""
+    mixed_entity = TodoListEntity()
+    mixed_entity.entity_id = "todo.mixed"
+    mixed_entity._attr_todo_items = [
+        TodoItem(
+            summary="Completed task 1",
+            uid="1",
+            status=TodoItemStatus.COMPLETED,
+        ),
+        TodoItem(
+            summary="Pending task 1",
+            uid="2",
+            status=TodoItemStatus.NEEDS_ACTION,
+        ),
+        TodoItem(
+            summary="Completed task 2",
+            uid="3",
+            status=TodoItemStatus.COMPLETED,
+        ),
+        TodoItem(
+            summary="Pending task 2",
+            uid="4",
+            status=TodoItemStatus.NEEDS_ACTION,
+        ),
+    ]
+    await create_mock_platform(hass, [mixed_entity])
+
+    # Test JSON export preserves status
+    response = await hass.services.async_call(
+        DOMAIN,
+        TodoServices.SERVICE_EXPORT,
+        {"filetype": "json"},
+        target={ATTR_ENTITY_ID: "todo.mixed"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "todo.mixed" in response
+    result = response["todo.mixed"]
+    exported_data = result["content"]
+
+    completed_items = [item for item in exported_data if item["status"] == "completed"]
+    pending_items = [item for item in exported_data if item["status"] == "needs_action"]
+
+    assert len(completed_items) == 2
+    assert len(pending_items) == 2
+    assert all("Completed task" in item["summary"] for item in completed_items)
+    assert all("Pending task" in item["summary"] for item in pending_items)

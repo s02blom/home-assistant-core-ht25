@@ -81,6 +81,16 @@
           "description": "[%key:component::todo::services::update_item::fields::item::description%]"
         }
       }
+    },
+    "export": {
+      "name": "Export list",
+      "description": "Export the to-do list to a file format.",
+      "fields": {
+        "filetype": {
+          "name": "File type",
+          "description": "Choose json, csv, or pdf."
+        }
+      }
     }
   },
   "selector": {

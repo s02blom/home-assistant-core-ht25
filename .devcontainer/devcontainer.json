@@ -5,7 +5,9 @@
   "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && script/setup",
   "postStartCommand": "script/bootstrap",
   "containerEnv": {
-    "PYTHONASYNCIODEBUG": "1"
+    "PYTHONASYNCIODEBUG": "1",
+    "HASS_FRONTEND_DEV": "1",
+    "HASS_FRONTEND_REPO": "/workspaces/home-assistant-frontend-ht25"
   },
   "features": {
     // Node feature required for Claude Code until fixed https://github.com/anthropics/devcontainer-features/issues/28
@@ -13,6 +15,9 @@
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
+  "mounts": [
+    "source=${localWorkspaceFolder}/../home-assistant-frontend-ht25,target=/workspaces/frontend,type=bind"
+  ],
   // Port 5683 udp is used by Shelly integration
   "appPort": ["8123:8123", "5683:5683/udp"],
   "runArgs": [
@@ -20,6 +25,9 @@
     "GIT_EDITOR=code --wait",
     "--security-opt",
     "label=disable"
+  ],
+  "mounts": [
+    "source=${localWorkspaceFolder}/../home-assistant-frontend-ht25,target=/workspaces/frontend,type=bind"
   ],
   "customizations": {
     "vscode": {

@@ -19,6 +19,9 @@
     },
     "update_item": {
       "service": "mdi:clipboard-edit"
+    },
+    "export": {
+      "service": "mdi:file-export"
     }
   }
 }

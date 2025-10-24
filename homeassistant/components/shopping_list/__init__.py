@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
+import csv
 from http import HTTPStatus
+from io import BytesIO, StringIO
 import logging
 from typing import Any, cast
 import uuid
 from datetime import datetime, timezone
 from aiohttp import web
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -16,7 +24,13 @@ from homeassistant.components import http, websocket_api
 from homeassistant.components.http.data_validator import RequestDataValidator
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_NAME, Platform
-from homeassistant.core import Context, HomeAssistant, ServiceCall, callback
+from homeassistant.core import (
+    Context,
+    HomeAssistant,
+    ServiceCall,
+    SupportsResponse,
+    callback,
+)
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.json import save_json
 from homeassistant.helpers.typing import ConfigType
@@ -31,12 +45,14 @@ from .const import (
     SERVICE_CLEAR_COMPLETED_ITEMS,
     SERVICE_COMPLETE_ALL,
     SERVICE_COMPLETE_ITEM,
+    SERVICE_EXPORT,
     SERVICE_INCOMPLETE_ALL,
     SERVICE_INCOMPLETE_ITEM,
     SERVICE_REMOVE_ITEM,
     SERVICE_SORT,
     SERVICE_SORT_BY_DATE,
 )
+from .recommendations import recommender
 
 PLATFORMS = [Platform.TODO]
 
@@ -44,14 +60,24 @@ ATTR_COMPLETE = "complete"
 
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = vol.Schema({DOMAIN: {}}, extra=vol.ALLOW_EXTRA)
-ITEM_UPDATE_SCHEMA = vol.Schema({ATTR_COMPLETE: bool, ATTR_NAME: str})
+ITEM_UPDATE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_COMPLETE): bool,
+        vol.Optional(ATTR_NAME): str,
+        vol.Optional("description"): str,
+    }
+)
 PERSISTENCE = ".shopping_list.json"
 
 SERVICE_ITEM_SCHEMA = vol.Schema({vol.Required(ATTR_NAME): cv.string})
 SERVICE_LIST_SCHEMA = vol.Schema({})
 SERVICE_SORT_SCHEMA = vol.Schema(
-    {vol.Optional(ATTR_REVERSE, default=DEFAULT_REVERSE): bool}
+    {
+        vol.Optional(ATTR_REVERSE, default=DEFAULT_REVERSE): bool,
+        vol.Optional("by", default="name"): vol.In(["name", "description"]),
+    }
 )
+SERVICE_EXPORT_SCHEMA = vol.Schema({vol.Optional("filetype", default="json"): str})
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -89,6 +115,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         else:
             await data.async_remove(item["id"])
 
+    async def export_list_service(call: ServiceCall) -> dict[str, Any]:
+        """Export the list into a fileformat. Can be csv, json or pdf."""
+        data = cast(ShoppingData, hass.data[DOMAIN])
+        export_type = call.data.get("filetype", "json")
+        return await data.export_list(export_type)
+
     async def complete_item_service(call: ServiceCall) -> None:
         """Mark the first item with matching `name` as completed."""
         data = hass.data[DOMAIN]
@@ -123,8 +155,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         await data.async_clear_completed()
 
     async def sort_list_service(call: ServiceCall) -> None:
-        """Sort all items by name."""
-        await data.async_sort(call.data[ATTR_REVERSE])
+        """Sort all items by name or description."""
+        await data.async_sort(call.data[ATTR_REVERSE], call.data["by"])
 
     async def sort_by_date_service(call: ServiceCall) -> None:
         """Sort all items by creation date."""
@@ -132,7 +164,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     data = hass.data[DOMAIN] = ShoppingData(hass)
     await data.async_load()
-
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_EXPORT,
+        export_list_service,
+        schema=SERVICE_EXPORT_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_ITEM, add_item_service, schema=SERVICE_ITEM_SCHEMA
     )
@@ -190,6 +228,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     websocket_api.async_register_command(hass, websocket_handle_update)
     websocket_api.async_register_command(hass, websocket_handle_clear)
     websocket_api.async_register_command(hass, websocket_handle_reorder)
+    websocket_api.async_register_command(hass, websocket_handle_export)
+    websocket_api.async_register_command(hass, websocket_handle_recommendations)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
@@ -210,7 +250,11 @@ class ShoppingData:
         self._listeners: list[Callable[[], None]] = []
 
     async def async_add(
-        self, name: str | None, complete: bool = False, context: Context | None = None
+        self,
+        name: str | None,
+        complete: bool = False,
+        description: str = "",
+        context: Context | None = None,
     ) -> dict[str, JsonValueType]:
         """Add a shopping list item."""
         item: dict[str, JsonValueType] = {
@@ -218,7 +262,9 @@ class ShoppingData:
             "id": uuid.uuid4().hex,
             "complete": complete,
             "created": datetime.now(timezone.utc).isoformat(),
+            "description": description,
         }
+
         self.items.append(item)
         await self.hass.async_add_executor_job(self.save)
         self._async_notify()
@@ -337,6 +383,95 @@ class ShoppingData:
         )
         return self.items
 
+    async def export_list(self, option: str = "json") -> dict[str, Any]:
+        """Export the shopping list to csv, json or pdf and return the data."""
+        if option == "json":
+
+            def create_json() -> list[dict[str, JsonValueType]]:
+                """Create JSON list."""
+                return self.items
+
+            json_content: list[
+                dict[str, JsonValueType]
+            ] = await self.hass.async_add_executor_job(create_json)
+            return {
+                "content": json_content,
+                "filename": "shopping_list.json",
+                "mime_type": "application/json",
+            }
+
+        if option == "csv":
+
+            def create_csv() -> str:
+                """Create CSV string."""
+                output = StringIO()
+                headers = ["name", "id", "complete"]
+                writer = csv.DictWriter(output, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(self.items)
+                return output.getvalue()
+
+            csv_content: str = await self.hass.async_add_executor_job(create_csv)
+            return {
+                "content": csv_content,
+                "filename": "shopping_list.csv",
+                "mime_type": "text/csv",
+            }
+
+        if option == "pdf":
+
+            def create_pdf() -> bytes:
+                """Create PDF bytes."""
+                buffer = BytesIO()
+                doc = SimpleDocTemplate(buffer, pagesize=letter)
+                elements = []
+
+                # Add title
+                styles = getSampleStyleSheet()
+                title = Paragraph("Shopping List", styles["Title"])
+                elements.append(title)
+                elements.append(Spacer(1, 1 * cm))
+
+                # Create table data
+                table_data = [["Item", "Status"]]
+                for item in self.items:
+                    status = "Complete" if item["complete"] else "Incomplete"
+                    table_data.append([cast(str, item["name"]), status])
+
+                # Create table with styling
+                table = Table(table_data, colWidths=[12 * cm, 8 * cm])
+                table.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("FONTSIZE", (0, 0), (-1, 0), 14),
+                            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                            ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
+                            ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                        ]
+                    )
+                )
+                elements.append(table)
+
+                # Build PDF
+                doc.build(elements)
+                return buffer.getvalue()
+
+            pdf_bytes: bytes = await self.hass.async_add_executor_job(create_pdf)
+            # Encode bytes to base64 for transmission
+            pdf_content: str = base64.b64encode(pdf_bytes).decode("utf-8")
+            return {
+                "content": pdf_content,
+                "filename": "shopping_list.pdf",
+                "mime_type": "application/pdf",
+                "encoding": "base64",
+            }
+
+        raise ValueError(f"Unsupported export format: {option}")
+
     @callback
     def async_reorder(
         self, item_ids: list[str], context: Context | None = None
@@ -396,15 +531,22 @@ class ShoppingData:
         )
 
     async def async_sort(
-        self, reverse: bool = False, context: Context | None = None
+        self,
+        reverse: bool = False,
+        by: str = "name",
+        context: Context | None = None,
     ) -> None:
-        """Sort items by name."""
-        self.items = sorted(self.items, key=lambda item: item["name"], reverse=reverse)  # type: ignore[arg-type,return-value]
-        self.hass.async_add_executor_job(self.save)
+        """Sort items by name or description."""
+        self.items = sorted(
+            self.items,
+            key=lambda item: str(item.get(by, "") or "").lower(),
+            reverse=reverse,
+        )
+        await self.hass.async_add_executor_job(self.save)
         self._async_notify()
         self.hass.bus.async_fire(
             EVENT_SHOPPING_LIST_UPDATED,
-            {"action": "sorted"},
+            {"action": f"sorted_by_{by}"},
             context=context,
         )
 
@@ -438,8 +580,23 @@ class ShoppingData:
         self.items = await self.hass.async_add_executor_job(load)
 
     def save(self) -> None:
-        """Save the items."""
+        """Save the items and update recommendations."""
         save_json(self.hass.config.path(PERSISTENCE), self.items)
+
+        try:
+            # Only consider active (incomplete) items
+            active_items = [
+                cast(str, i["name"])
+                for i in self.items
+                if isinstance(i.get("name"), str) and not i.get("complete")
+            ]
+            if len(active_items) > 1:
+                recommender.observe_list(active_items)
+            else:
+                _LOGGER.warning("Not enough active items to learn co-occurrence")
+
+        except (ValueError, TypeError) as err:
+            _LOGGER.warning("Failed to update shopping recommendations: %s", err)
 
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         """Add a listener to notify when data is updated."""
@@ -494,11 +651,20 @@ class CreateShoppingListItemView(http.HomeAssistantView):
     url = "/api/shopping_list/item"
     name = "api:shopping_list:item"
 
-    @RequestDataValidator(vol.Schema({vol.Required("name"): str}))
+    @RequestDataValidator(
+        vol.Schema(
+            {
+                vol.Required("name"): str,
+                vol.Optional("description", default=""): str,
+            }
+        )
+    )
     async def post(self, request: web.Request, data: dict[str, str]) -> web.Response:
         """Create a new shopping list item."""
         hass = request.app[http.KEY_HASS]
-        item = await hass.data[DOMAIN].async_add(data["name"])
+        item = await hass.data[DOMAIN].async_add(
+            data["name"], description=data.get("description", "")
+        )
         return self.json(item)
 
 
@@ -526,6 +692,22 @@ def websocket_handle_items(
     connection.send_message(
         websocket_api.result_message(msg["id"], hass.data[DOMAIN].items)
     )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shopping_list/export",
+        vol.Optional("filetype", default="json"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_handle_export(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Handle exporting shopping list to csv,json,pdf."""
+    filetype = msg.get("filetype", "json")
+    result = await hass.data[DOMAIN].export_list(filetype)
+    connection.send_message(websocket_api.result_message(msg["id"], result))
 
 
 @websocket_api.websocket_command(
@@ -575,6 +757,7 @@ async def websocket_handle_remove(
         vol.Required("item_id"): str,
         vol.Optional("name"): str,
         vol.Optional("complete"): bool,
+        vol.Optional("description"): str,
     }
 )
 @websocket_api.async_response
@@ -641,3 +824,21 @@ def websocket_handle_reorder(
         return
 
     connection.send_result(msg_id)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shopping_list/recommendations",
+        vol.Required("item"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_handle_recommendations(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return item recommendations for a given shopping list item."""
+    item = msg["item"]
+    suggestions = recommender.suggest(item)
+    connection.send_result(msg["id"], {"suggestions": suggestions})

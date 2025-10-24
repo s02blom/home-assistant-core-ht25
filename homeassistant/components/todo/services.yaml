@@ -110,3 +110,17 @@ remove_completed_items:
       domain: todo
       supported_features:
         - todo.TodoListEntityFeature.DELETE_TODO_ITEM
+
+export:
+  target:
+    entity:
+      domain: todo
+  fields:
+    filetype:
+      example: json
+      selector:
+        select:
+          options:
+            - json
+            - csv
+            - pdf
