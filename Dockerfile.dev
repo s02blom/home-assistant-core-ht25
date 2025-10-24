@@ -38,7 +38,7 @@ RUN uv python install 3.13.2
 
 USER vscode
 ENV VIRTUAL_ENV="/home/vscode/.local/ha-venv"
-RUN uv venv --python 3.13.2 $VIRTUAL_ENV
+RUN uv venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 WORKDIR /tmp
