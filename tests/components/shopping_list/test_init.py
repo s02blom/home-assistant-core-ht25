@@ -1018,9 +1018,17 @@ async def test_export_empty_list_csv(hass: HomeAssistant, sl_setup) -> None:
 
     # Parse and verify the CSV has headers but no data rows
     csv_content = response["content"]
+    # One header line, no data rows
     lines = csv_content.strip().split("\n")
-    assert len(lines) == 1  # Only header line
-    assert "name,id,complete" in lines[0]
+    assert len(lines) == 1
+
+    # Check header columns (order-insensitive and future-proof)
+    reader = csv.DictReader(lines)
+    assert reader.fieldnames is not None
+    assert set(reader.fieldnames) == {"id", "name", "description", "complete"}
+
+    # Ensure there are no data rows
+    assert sum(1 for _ in reader) == 0
 
 
 async def test_export_empty_list_pdf(hass: HomeAssistant, sl_setup) -> None:
@@ -1295,3 +1303,57 @@ async def test_export_list_mixed_completion_status(
             assert item["complete"] is True
         else:
             assert item["complete"] is False
+
+
+async def test_service_sort_by_name_and_description(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator, sl_setup
+) -> None:
+    """Test the shopping_list.sort service sorts correctly by name and description."""
+    client = await hass_client()
+
+    # Add items with both names and descriptions
+    await client.post(
+        "/api/shopping_list/item", json={"name": "banana", "description": "yellow"}
+    )
+    await client.post(
+        "/api/shopping_list/item", json={"name": "apple", "description": "green"}
+    )
+    await client.post(
+        "/api/shopping_list/item", json={"name": "carrot", "description": "orange"}
+    )
+
+    events = async_capture_events(hass, EVENT_SHOPPING_LIST_UPDATED)
+
+    # Sort by name (alphabetical)
+    await hass.services.async_call(DOMAIN, "sort", {"by": "name"}, blocking=True)
+    assert len(events) >= 1
+    assert events[-1].data["action"] == "sorted_by_name"
+
+    items = hass.data[DOMAIN].items
+    names = [item["name"] for item in items]
+    assert names == ["apple", "banana", "carrot"]
+
+    # Sort by name in reverse
+    await hass.services.async_call(
+        DOMAIN, "sort", {"by": "name", "reverse": True}, blocking=True
+    )
+    assert events[-1].data["action"] == "sorted_by_name"
+    items = hass.data[DOMAIN].items
+    names = [item["name"] for item in items]
+    assert names == ["carrot", "banana", "apple"]
+
+    # Sort by description
+    await hass.services.async_call(DOMAIN, "sort", {"by": "description"}, blocking=True)
+    assert events[-1].data["action"] == "sorted_by_description"
+    items = hass.data[DOMAIN].items
+    descriptions = [item["description"] for item in items]
+    assert descriptions == ["green", "orange", "yellow"]
+
+    # Sort by description in reverse
+    await hass.services.async_call(
+        DOMAIN, "sort", {"by": "description", "reverse": True}, blocking=True
+    )
+    assert events[-1].data["action"] == "sorted_by_description"
+    items = hass.data[DOMAIN].items
+    descriptions = [item["description"] for item in items]
+    assert descriptions == ["yellow", "orange", "green"]
