@@ -373,109 +373,96 @@ class ShoppingData:
 
     async def export_list(self, option: str = "json") -> dict[str, Any]:
         """Export the shopping list to csv, json or pdf and return the data."""
-        if option == "json":
 
-            def create_json() -> list[dict[str, JsonValueType]]:
-                """Create JSON list."""
-                return self.items
+        def create_json() -> list[dict[str, JsonValueType]]:
+            """Create JSON list."""
+            return self.items
 
-            json_content: list[
-                dict[str, JsonValueType]
-            ] = await self.hass.async_add_executor_job(create_json)
-            return {
-                "content": json_content,
-                "filename": "shopping_list.json",
-                "mime_type": "application/json",
-            }
+        def create_csv() -> str:
+            """Create CSV string including optional description."""
+            output = StringIO()
+            headers = ["id", "name", "description", "complete"]
+            writer = csv.DictWriter(output, fieldnames=headers, extrasaction="ignore")
+            writer.writeheader()
 
-        if option == "csv":
+            rows = [
+                {
+                    "id": item.get("id", ""),
+                    "name": item.get("name", ""),
+                    "description": (
+                        str(item["description"])
+                        if item.get("description") is not None
+                        else ""
+                    ),
+                    "complete": bool(item.get("complete", False)),
+                }
+                for item in self.items
+            ]
+            writer.writerows(rows)
+            return output.getvalue()
 
-            def create_csv() -> str:
-                """Create CSV string including optional description."""
-                output = StringIO()
-                headers = ["id", "name", "description", "complete"]
-                writer = csv.DictWriter(
-                    output, fieldnames=headers, extrasaction="ignore"
+        def create_pdf() -> bytes:
+            """Create PDF bytes."""
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            elements = []
+
+            styles = getSampleStyleSheet()
+            elements += [
+                Paragraph("Shopping List", styles["Title"]),
+                Spacer(1, 1 * cm),
+            ]
+
+            table_data = [["Item", "Status"]] + [
+                [
+                    cast(str, item["name"]),
+                    "Complete" if item["complete"] else "Incomplete",
+                ]
+                for item in self.items
+            ]
+
+            table = Table(table_data, colWidths=[12 * cm, 8 * cm])
+            table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, 0), 14),
+                        ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                        ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
+                        ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                    ]
                 )
-                writer.writeheader()
+            )
+            elements.append(table)
+            doc.build(elements)
+            return buffer.getvalue()
 
-                rows: list[dict[str, Any]] = []
-                for item in self.items:
-                    desc = item.get("description")
-                    if desc is not None and not isinstance(desc, str):
-                        desc = str(desc)
-                    rows.append(
-                        {
-                            "id": item.get("id", ""),
-                            "name": item.get("name", ""),
-                            "description": desc or "",
-                            "complete": bool(item.get("complete", False)),
-                        }
-                    )
+        # Map of supported export formats to their respective handlers
+        exporters = {
+            "json": (create_json, "shopping_list.json", "application/json"),
+            "csv": (create_csv, "shopping_list.csv", "text/csv"),
+            "pdf": (create_pdf, "shopping_list.pdf", "application/pdf"),
+        }
 
-                writer.writerows(rows)
-                return output.getvalue()
+        if option not in exporters:
+            raise ValueError(f"Unsupported export format: {option}")
 
-            csv_content: str = await self.hass.async_add_executor_job(create_csv)
-            return {
-                "content": csv_content,
-                "filename": "shopping_list.csv",
-                "mime_type": "text/csv",
-            }
+        create_func, filename, mime_type = exporters[option]
+        content = await self.hass.async_add_executor_job(create_func)
 
         if option == "pdf":
-
-            def create_pdf() -> bytes:
-                """Create PDF bytes."""
-                buffer = BytesIO()
-                doc = SimpleDocTemplate(buffer, pagesize=letter)
-                elements = []
-
-                # Add title
-                styles = getSampleStyleSheet()
-                title = Paragraph("Shopping List", styles["Title"])
-                elements.append(title)
-                elements.append(Spacer(1, 1 * cm))
-
-                # Create table data
-                table_data = [["Item", "Status"]]
-                for item in self.items:
-                    status = "Complete" if item["complete"] else "Incomplete"
-                    table_data.append([cast(str, item["name"]), status])
-
-                # Create table with styling
-                table = Table(table_data, colWidths=[12 * cm, 8 * cm])
-                table.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.white),
-                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ("FONTSIZE", (0, 0), (-1, 0), 14),
-                            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
-                            ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
-                            ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                        ]
-                    )
-                )
-                elements.append(table)
-
-                # Build PDF
-                doc.build(elements)
-                return buffer.getvalue()
-
-            pdf_bytes: bytes = await self.hass.async_add_executor_job(create_pdf)
-            # Encode bytes to base64 for transmission
-            pdf_content: str = base64.b64encode(pdf_bytes).decode("utf-8")
+            content = base64.b64encode(cast(bytes, content)).decode("utf-8")
             return {
-                "content": pdf_content,
-                "filename": "shopping_list.pdf",
-                "mime_type": "application/pdf",
+                "content": content,
+                "filename": filename,
+                "mime_type": mime_type,
                 "encoding": "base64",
             }
 
-        raise ValueError(f"Unsupported export format: {option}")
+        return {"content": content, "filename": filename, "mime_type": mime_type}
 
     @callback
     def async_reorder(
