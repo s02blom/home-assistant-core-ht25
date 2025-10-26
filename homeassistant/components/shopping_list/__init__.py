@@ -391,12 +391,29 @@ class ShoppingData:
         if option == "csv":
 
             def create_csv() -> str:
-                """Create CSV string."""
+                """Create CSV string including optional description."""
                 output = StringIO()
-                headers = ["name", "id", "complete"]
-                writer = csv.DictWriter(output, fieldnames=headers)
+                headers = ["id", "name", "description", "complete"]
+                writer = csv.DictWriter(
+                    output, fieldnames=headers, extrasaction="ignore"
+                )
                 writer.writeheader()
-                writer.writerows(self.items)
+
+                rows: list[dict[str, Any]] = []
+                for item in self.items:
+                    desc = item.get("description")
+                    if desc is not None and not isinstance(desc, str):
+                        desc = str(desc)
+                    rows.append(
+                        {
+                            "id": item.get("id", ""),
+                            "name": item.get("name", ""),
+                            "description": desc or "",
+                            "complete": bool(item.get("complete", False)),
+                        }
+                    )
+
+                writer.writerows(rows)
                 return output.getvalue()
 
             csv_content: str = await self.hass.async_add_executor_job(create_csv)
