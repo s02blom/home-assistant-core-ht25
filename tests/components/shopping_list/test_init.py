@@ -1031,6 +1031,31 @@ async def test_export_empty_list_csv(hass: HomeAssistant, sl_setup) -> None:
     assert sum(1 for _ in reader) == 0
 
 
+async def test_export_empty_list_pdf(hass: HomeAssistant, sl_setup) -> None:
+    """Test exporting empty shopping list to pdf format."""
+    # Don't add any items - test with empty list
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_EXPORT,
+        {"filetype": "pdf"},
+        blocking=True,
+        return_response=True,
+    )
+
+    # Verify the response structure
+    assert "content" in response
+    assert "filename" in response
+    assert "mime_type" in response
+    assert "encoding" in response
+    assert response["filename"] == "shopping_list.pdf"
+    assert response["mime_type"] == "application/pdf"
+    assert response["encoding"] == "base64"
+
+    # Decode and verify it's still a valid PDF
+    pdf_content = base64.b64decode(response["content"])
+    assert pdf_content[:4] == b"%PDF"
+
+
 async def test_ws_export_list_csv(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator, sl_setup
 ) -> None:
