@@ -39,7 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LidarrConfigEntry) -> bo
         session=async_get_clientsession(hass, host_configuration.verify_ssl),
         request_timeout=60,
     )
-    data = LidarrData(
+    data: LidarrData = LidarrData(
         disk_space=DiskSpaceDataUpdateCoordinator(
             hass, entry, host_configuration, lidarr
         ),
@@ -48,7 +48,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LidarrConfigEntry) -> bo
         wanted=WantedDataUpdateCoordinator(hass, entry, host_configuration, lidarr),
         albums=AlbumsDataUpdateCoordinator(hass, entry, host_configuration, lidarr),
     )
-    for field in fields(data):
+    for field in fields(LidarrData):
         coordinator = getattr(data, field.name)
         await coordinator.async_config_entry_first_refresh()
     device_registry = dr.async_get(hass)
