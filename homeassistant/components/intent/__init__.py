@@ -237,8 +237,8 @@ class OnOffIntentHandler(intent.ServiceIntentHandler):
             return
 
         if state.domain == VALVE_DOMAIN:
-            # on = opened
-            # off = closed
+            # on means opened
+            # off means closed
             if service == SERVICE_TURN_ON:
                 service_name = SERVICE_OPEN_VALVE
             else:
