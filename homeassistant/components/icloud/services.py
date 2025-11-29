@@ -102,7 +102,7 @@ def update_account(service: ServiceCall) -> None:
 
 def _get_account(hass: HomeAssistant, account_identifier: str) -> IcloudAccount:
     if account_identifier is None:
-        return None
+        raise ValueError("Account_identifier is None")
 
     entry: IcloudConfigEntry
     for entry in hass.config_entries.async_loaded_entries(DOMAIN):

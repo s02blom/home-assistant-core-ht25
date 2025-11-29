@@ -40,6 +40,12 @@ sort:
       selector:
         boolean:
 
+sort_by_date:
+  fields:
+    reverse:
+      default: false
+      selector:
+        boolean:
 export:
   fields:
     filetype:
